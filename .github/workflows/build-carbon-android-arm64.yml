@@ -243,6 +243,45 @@ jobs:
           if [ ! -d nfsmw-android/.git ]; then git clone "$NFSMW_ANDROID_REPO" nfsmw-android; fi
           git -C nfsmw-android fetch --tags origin
           git -C nfsmw-android checkout --force "$NFSMW_ANDROID_SHA"
+
+          python - <<'PY'
+          import pathlib, sys
+          p = pathlib.Path("nfsmw-android/tools/fetch_thirdparty.py")
+          text = p.read_text()
+          if "carbon-ci-symlink-patch" in text:
+              print("already patched"); sys.exit(0)
+          old = (
+              "                if resolved_target is not None:\n"
+              "                    shutil.copy2(resolved_target, dst)\n"
+              "                    if was_existing:\n"
+              "                        kept += 1\n"
+              "                    else:\n"
+              "                        copied += 1\n"
+              "                else:\n"
+              "                    shutil.copy2(src, dst)\n"
+              "                    copied += 1\n"
+          )
+          new = (
+              "                if resolved_target is not None:\n"
+              "                    shutil.copy2(resolved_target, dst)\n"
+              "                    if was_existing:\n"
+              "                        kept += 1\n"
+              "                    else:\n"
+              "                        copied += 1\n"
+              "                elif os.path.islink(src) and not os.path.exists(src):\n"
+              "                    # carbon-ci-symlink-patch: dangling submodule symlinks\n"
+              "                    # (e.g. MoltenVK's Apple-only demo deps) are unused on Android.\n"
+              "                    print(f'Skipping dangling symlink (unused on Android): {relative_path}')\n"
+              "                else:\n"
+              "                    shutil.copy2(src, dst)\n"
+              "                    copied += 1\n"
+          )
+          if text.count(old) != 1:
+              sys.exit(f"pattern not found exactly once ({text.count(old)} matches): fetch_thirdparty.py changed upstream?")
+          p.write_text(text.replace(old, new))
+          print("patched nfsmw-android/tools/fetch_thirdparty.py")
+          PY
+
           stamp="nfsmw-android/.thirdparty-ok-$NFSMW_ANDROID_SHA"
           if [ ! -f "$stamp" ]; then
             python nfsmw-android/tools/fetch_thirdparty.py
@@ -344,4 +383,3 @@ jobs:
           name: carbon-android-arm64-apk
           path: out/apk/*.apk
           retention-days: 3
-
