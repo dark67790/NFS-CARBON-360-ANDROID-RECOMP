@@ -288,6 +288,40 @@ jobs:
             touch "$stamp"
           fi
 
+      - name: Patch pipeline_cache.cpp for concurrent pipeline-creation corruption
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path("nfsmw-android/sdk/src/graphics/vulkan/pipeline_cache.cpp")
+          text = p.read_text()
+          if "carbon-ci-pipeline-mutex" in text:
+              print("already patched"); sys.exit(0)
+          pattern = re.compile(
+              r'VkResult create_result = dfn\.vkCreateGraphicsPipelines\(device, VK_NULL_HANDLE, 1,\s*\n'
+              r'\s*&pipeline_create_info, nullptr, &pipeline\);'
+          )
+          matches = pattern.findall(text)
+          if len(matches) != 1:
+              sys.exit(f"pattern not found exactly once ({len(matches)} matches): pipeline_cache.cpp changed upstream?")
+          replacement = (
+              "VkResult create_result;\n"
+              "  {\n"
+              "    // carbon-ci-pipeline-mutex: some Adreno driver builds corrupt rendering when\n"
+              "    // vkCreateGraphicsPipelines is called concurrently from multiple threads with no\n"
+              "    // shared VkPipelineCache (confirmed: clean with vulkan_pipeline_creation_threads=1,\n"
+              "    // corrupted at 2+). Serialize only the driver call; shader translation/setup above\n"
+              "    // this point stays parallel across threads.\n"
+              "    static std::mutex driver_pipeline_create_mutex;\n"
+              "    std::lock_guard<std::mutex> driver_pipeline_create_lock(driver_pipeline_create_mutex);\n"
+              "    create_result = dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,\n"
+              "                                                   &pipeline_create_info, nullptr, &pipeline);\n"
+              "  }"
+          )
+          text = pattern.sub(replacement, text, count=1)
+          p.write_text(text)
+          print("patched pipeline_cache.cpp")
+          PY
+
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
