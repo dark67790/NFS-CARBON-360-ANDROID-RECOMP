@@ -1,0 +1,347 @@
+# .github/workflows/build-carbon-android-arm64.yml
+#
+# Builds NFS-CARBON-360-ANDROID-RECOMP on a Linux arm64 self-hosted runner.
+#
+# One-time setup on the runner (never committed, never uploaded):
+#   1. Your extracted Xbox 360 copy (default.xex + NFS/ + Movies/), e.g. /opt/nfsc/game
+#      -> repo Settings > Variables > NFSC_GAME_DIR  (default: /opt/nfsc/game)
+#   2. OPTIONAL: carbon-82000000.bin memory dump made once on a Windows PC with
+#      `run_pc.ps1 -DumpImage` (it needs the x64 D3D12 build, it cannot be made here)
+#      -> /opt/nfsc/carbon-82000000.bin or repo variable NFSC_DUMP_FILE
+#      Without it the APK still compiles but the "small entries" recovery is skipped.
+#   3. Passwordless sudo for the first run with install_system_packages=true
+#      (or install the apt packages / clang-20 yourself).
+#
+# SECURITY: this repo is public and the runner holds your game files. Keep this
+# workflow on workflow_dispatch only. Do NOT add pull_request triggers, and set
+# Settings > Actions > General > "Require approval for all outside collaborators".
+
+name: Build Carbon Android (arm64 runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      install_system_packages:
+        description: "apt install deps + LLVM 20 (needs passwordless sudo)"
+        type: boolean
+        default: false
+      skip_codegen:
+        description: "Reuse generated/ from the previous run on this runner"
+        type: boolean
+        default: false
+      upload_apk:
+        description: "Upload the APK as an artifact (visible to anyone who can see the repo)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: carbon-android-arm64
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Pinned by the Carbon README
+  NFSMW_ANDROID_REPO: https://github.com/codepdbh/nfsmw-android.git
+  NFSMW_ANDROID_SHA: a7e6e4c3ca71064d0eea56d91fcc8aaf63418fc7
+  XEX_SHA256: b1e423914f5feb0871c8903aded4d86852d34be3b831b42f5c6473c7c7304221
+  NDK_VERSION: 28.2.13676358
+  CMAKE_VERSION: 3.30.5
+  # Google only ships x86_64 NDK / aapt2 for Linux, so these are community aarch64 builds
+  NDK_URL: https://github.com/HomuHomu833/android-ndk-custom/releases/download/r28/android-ndk-r28c-aarch64-linux-musl.tar.xz
+  AAPT2_SDK_URL: https://github.com/HomuHomu833/android-sdk-custom/releases/download/35.0.2/android-sdk-aarch64-linux-musl.tar.xz
+  # sdkmanager is pure Java, so the official zip works on arm64
+  CMDLINE_TOOLS_URL: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+  # Runner-local paths
+  GAME_DIR: ${{ vars.NFSC_GAME_DIR || '/opt/nfsc/game' }}
+  DUMP_FILE: ${{ vars.NFSC_DUMP_FILE || '/opt/nfsc/carbon-82000000.bin' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, ARM64]
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # keep ignored files (generated/, out/) so skip_codegen works
+          clean: false
+
+      - name: Preflight (arch, game copy, disk, memory)
+        run: |
+          [ "$(uname -m)" = "aarch64" ] || { echo "::error::Runner is $(uname -m), expected aarch64"; exit 1; }
+
+          W="$(dirname "$GITHUB_WORKSPACE")"
+          TOOLS="$W/_tools"
+          mkdir -p "$TOOLS" "$W/_out"
+
+          if [ ! -f "$GAME_DIR/default.xex" ]; then
+            echo "::error::$GAME_DIR/default.xex not found. Put your extracted Xbox 360 copy on the runner and set repo variable NFSC_GAME_DIR."
+            exit 1
+          fi
+          actual="$(sha256sum "$GAME_DIR/default.xex" | cut -d' ' -f1)"
+          if [ "$actual" != "$XEX_SHA256" ]; then
+            echo "::error::default.xex SHA-256 mismatch (got $actual). The recompiled code only matches the tested PAL English copy."
+            exit 1
+          fi
+          echo "default.xex OK (matches tested copy)"
+
+          if [ -f "$DUMP_FILE" ]; then echo "Memory dump found: will run small-entry recovery"
+          else echo "::warning::No memory dump at $DUMP_FILE. Small-entry recovery will be skipped."; fi
+
+          avail_gb="$(df -BG --output=avail "$W" | tail -1 | tr -dc '0-9')"
+          [ "$avail_gb" -ge 30 ] || echo "::warning::Only ${avail_gb} GB free on the runner disk"
+
+          mem_gb="$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)"
+          jobs=$(( mem_gb / 2 ))
+          [ "$jobs" -gt "$(nproc)" ] && jobs="$(nproc)"
+          [ "$jobs" -lt 1 ] && jobs=1
+          echo "RAM ${mem_gb} GB, using ${jobs} parallel jobs"
+
+          {
+            echo "W=$W"
+            echo "TOOLS=$TOOLS"
+            echo "SDK_DIR=$W/nfsmw-android/sdk"
+            echo "ANDROID_HOME=$TOOLS/android-sdk"
+            echo "ANDROID_SDK_ROOT=$TOOLS/android-sdk"
+            echo "JOBS=$jobs"
+          } >> "$GITHUB_ENV"
+
+      - name: Install system packages (optional)
+        if: inputs.install_system_packages
+        run: |
+          sudo -n true 2>/dev/null || { echo "::error::Passwordless sudo is not available. Install the packages manually."; exit 1; }
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential git curl ca-certificates unzip zip xz-utils file wget gnupg lsb-release \
+            software-properties-common python3 python3-venv python3-pip ninja-build pkg-config \
+            openjdk-17-jdk-headless libvulkan-dev libx11-dev libxcb1-dev libwayland-dev libxkbcommon-dev
+          if ! command -v clang-20 >/dev/null; then
+            curl -fsSL https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
+            chmod +x "$RUNNER_TEMP/llvm.sh"
+            sudo "$RUNNER_TEMP/llvm.sh" 20
+          fi
+
+      - name: Check host tools
+        run: |
+          missing=()
+          for c in git curl unzip xz file python3 ninja java javac clang-20 clang++-20; do
+            command -v "$c" >/dev/null || missing+=("$c")
+          done
+          python3 -c 'import venv, ensurepip' 2>/dev/null || missing+=("python3-venv")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing on the runner: ${missing[*]}. Re-run with install_system_packages=true or install them."
+            exit 1
+          fi
+          major="$(java -version 2>&1 | sed -n '1s/.*version "\([0-9]*\).*/\1/p')"
+          [ "${major:-0}" -ge 17 ] || { echo "::error::JDK 17+ required (found ${major:-none})"; exit 1; }
+          JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+          clang++-20 --version | head -1
+          java -version 2>&1 | head -1
+
+      - name: Python env (capstone etc.)
+        run: |
+          python3 -m venv "$TOOLS/venv"
+          "$TOOLS/venv/bin/pip" install --quiet --upgrade pip
+          "$TOOLS/venv/bin/pip" install --quiet -r requirements.txt
+          echo "$TOOLS/venv/bin" >> "$GITHUB_PATH"
+
+      - name: CMake 3.30.5 (arm64) and ninja wrapper
+        run: |
+          CM_DIR="$TOOLS/cmake-$CMAKE_VERSION"
+          if [ ! -x "$CM_DIR/bin/cmake" ]; then
+            curl -fL --retry 3 -o "$RUNNER_TEMP/cmake.tgz" \
+              "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz"
+            rm -rf "$CM_DIR"; mkdir -p "$CM_DIR"
+            tar -xzf "$RUNNER_TEMP/cmake.tgz" -C "$CM_DIR" --strip-components=1
+            rm -f "$RUNNER_TEMP/cmake.tgz"
+          fi
+          # Kitware's tarball has no ninja. Wrap the system one so Gradle's CMake
+          # runs respect the memory-based job limit.
+          REAL_NINJA="$(PATH=/usr/local/bin:/usr/bin:/bin command -v ninja)"
+          printf '#!/usr/bin/env bash\nexec "%s" -j "${NINJA_JOBS:-%s}" "$@"\n' "$REAL_NINJA" "$JOBS" > "$CM_DIR/bin/ninja"
+          chmod +x "$CM_DIR/bin/ninja"
+          # AGP looks for the SDK-managed CMake in $ANDROID_HOME/cmake/<version>
+          mkdir -p "$ANDROID_HOME/cmake"
+          ln -sfn "$CM_DIR" "$ANDROID_HOME/cmake/$CMAKE_VERSION"
+          echo "$CM_DIR/bin" >> "$GITHUB_PATH"
+          "$CM_DIR/bin/cmake" --version | head -1
+
+      - name: Android SDK (platform 35)
+        run: |
+          mkdir -p "$ANDROID_HOME"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then
+            curl -fL --retry 3 -o "$RUNNER_TEMP/cmdtools.zip" "$CMDLINE_TOOLS_URL"
+            rm -rf "$RUNNER_TEMP/cmdtools"; mkdir -p "$RUNNER_TEMP/cmdtools"
+            unzip -q "$RUNNER_TEMP/cmdtools.zip" -d "$RUNNER_TEMP/cmdtools"
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+            mv "$RUNNER_TEMP/cmdtools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+            rm -rf "$RUNNER_TEMP/cmdtools" "$RUNNER_TEMP/cmdtools.zip"
+          fi
+          yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: aarch64 aapt2 (Google ships x86_64 only)
+        run: |
+          AAPT2_DIR="$TOOLS/aapt2-arm64"
+          if [ ! -x "$AAPT2_DIR/aapt2" ]; then
+            dl="$RUNNER_TEMP/sdkdl"
+            rm -rf "$dl"; mkdir -p "$dl" "$AAPT2_DIR"
+            curl -fL --retry 3 -o "$dl/sdk.tar.xz" "$AAPT2_SDK_URL"
+            tar -xJf "$dl/sdk.tar.xz" -C "$dl"
+            found="$(find "$dl" -type f -name aapt2 | sort -V | tail -1)"
+            [ -n "$found" ] || { echo "::error::No aapt2 inside $AAPT2_SDK_URL"; exit 1; }
+            cp -a "$(dirname "$found")/." "$AAPT2_DIR/"
+            chmod +x "$AAPT2_DIR/aapt2"
+            rm -rf "$dl"
+          fi
+          file "$AAPT2_DIR/aapt2" | grep -q 'ARM aarch64' || { echo "::error::aapt2 is not an aarch64 binary"; exit 1; }
+          "$AAPT2_DIR/aapt2" version
+          echo "AAPT2=$AAPT2_DIR/aapt2" >> "$GITHUB_ENV"
+
+      - name: Android NDK r28c (aarch64 host build) and smoke test
+        run: |
+          NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
+          if [ ! -f "$NDK_DIR/source.properties" ]; then
+            dl="$RUNNER_TEMP/ndk-dl"
+            rm -rf "$dl"; mkdir -p "$dl" "$ANDROID_HOME/ndk"
+            curl -fL --retry 3 -o "$dl/ndk.tar.xz" "$NDK_URL"
+            tar -xJf "$dl/ndk.tar.xz" -C "$dl"
+            src="$(find "$dl" -maxdepth 2 -name source.properties -printf '%h\n' | head -1)"
+            [ -n "$src" ] || { echo "::error::source.properties not found in the NDK archive"; exit 1; }
+            rm -rf "$NDK_DIR"; mv "$src" "$NDK_DIR"
+            rm -rf "$dl"
+          fi
+          grep -Eq "^Pkg.Revision *= *$NDK_VERSION" "$NDK_DIR/source.properties" || {
+            echo "::error::NDK revision is not $NDK_VERSION:"; cat "$NDK_DIR/source.properties"; exit 1; }
+
+          # AGP/NDK expect the prebuilt dir to be called linux-x86_64
+          PRE="$NDK_DIR/toolchains/llvm/prebuilt"
+          if [ ! -e "$PRE/linux-x86_64" ]; then
+            ln -s "$(ls -1 "$PRE" | head -1)" "$PRE/linux-x86_64"
+          fi
+
+          # Compile and link something for Android before spending an hour on the real build
+          printf '#include <string>\nint main(){std::string s("ok");return (int)s.size()-2;}\n' > "$RUNNER_TEMP/t.cpp"
+          "$PRE/linux-x86_64/bin/aarch64-linux-android35-clang++" -std=c++23 -O1 \
+            "$RUNNER_TEMP/t.cpp" -o "$RUNNER_TEMP/t.out"
+          file "$RUNNER_TEMP/t.out" | grep -q 'ARM aarch64' || { echo "::error::NDK smoke test produced a non-aarch64 binary"; exit 1; }
+          echo "NDK smoke test OK"
+
+      - name: nfsmw-android (pinned) and third-party fetch
+        run: |
+          cd "$W"
+          if [ ! -d nfsmw-android/.git ]; then git clone "$NFSMW_ANDROID_REPO" nfsmw-android; fi
+          git -C nfsmw-android fetch --tags origin
+          git -C nfsmw-android checkout --force "$NFSMW_ANDROID_SHA"
+          stamp="nfsmw-android/.thirdparty-ok-$NFSMW_ANDROID_SHA"
+          if [ ! -f "$stamp" ]; then
+            python nfsmw-android/tools/fetch_thirdparty.py
+            touch "$stamp"
+          fi
+
+      - name: Link game copy next to the repo
+        run: |
+          # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
+          # Windows ignores case, Linux does not. run_pc.ps1/README use the capitalised name.
+          ln -sfn "$GAME_DIR" "$W/need_for_speed_carbon"
+          ln -sfn "$GAME_DIR" "$W/Need_for_Speed_Carbon"
+          test -f "$W/need_for_speed_carbon/default.xex"
+
+      - name: Patch CMakeLists for a Linux host (D3D12 is forced on non-Android)
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          p = pathlib.Path("CMakeLists.txt")
+          lines = p.read_text().splitlines()
+          if any("carbon-ci-host-patch" in l for l in lines):
+              print("already patched"); sys.exit(0)
+          i = next((k for k, l in enumerate(lines) if "REXGLUE_USE_D3D12 ON" in l), None)
+          if i is None:
+              sys.exit("pattern not found: REXGLUE_USE_D3D12 ON (CMakeLists changed upstream?)")
+          j = i - 1
+          while not lines[j].strip():
+              j -= 1
+          if lines[j].strip() != "else()":
+              sys.exit("expected else() before the D3D12 block, got: " + lines[j])
+          k = next((n for n in range(i, i + 6) if "REXGLUE_USE_VULKAN OFF" in lines[n]), None)
+          if k is None:
+              sys.exit("pattern not found: REXGLUE_USE_VULKAN OFF")
+          lines[j] = "elseif(WIN32) # carbon-ci-host-patch"
+          lines[k + 1:k + 1] = [
+              "else()",
+              '  set(REXGLUE_USE_D3D12 OFF CACHE BOOL "Linux host" FORCE)',
+              '  set(REXGLUE_USE_VULKAN ON CACHE BOOL "Linux host" FORCE)',
+          ]
+          p.write_text("\n".join(lines) + "\n")
+          print("patched CMakeLists.txt")
+          PY
+
+      - name: Code generation from default.xex (native arm64 host tools)
+        if: "!inputs.skip_codegen"
+        run: |
+          # build_pc.ps1 used clang.exe + -march=x86-64-v2 + VS dev shell. Native arm64 clang-20 here.
+          cmake -S . -B out/pc -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DREXSDK_DIR="$SDK_DIR"
+          cmake --build out/pc --target nfscarbon_codegen --parallel "$JOBS"
+          python tools/fix_local_branches.py
+          test -f generated/default/nfscarbon_pch.h
+
+      - name: Small-entry recovery from local memory dump
+        run: |
+          if [ -f "$DUMP_FILE" ]; then
+            mkdir -p out/runtime/cache
+            cp "$DUMP_FILE" out/runtime/cache/carbon-82000000.bin
+            python tools/recover_small_entries.py
+            python tools/verify_small_entries.py
+          else
+            echo "::warning::Skipping recovery (no dump). The APK may crash where recovered entries are needed."
+          fi
+
+      - name: Verify registration maps
+        run: python tools/verify_registration_maps.py
+
+      - name: Build APK (Gradle, aarch64 toolchain)
+        run: |
+          cd android
+          printf 'sdk.dir=%s\ncmake.dir=%s\n' "$ANDROID_HOME" "$ANDROID_HOME/cmake/$CMAKE_VERSION" > local.properties
+          chmod +x gradlew
+          export NINJA_JOBS="$JOBS"
+          ./gradlew --no-daemon --stacktrace assembleRelease \
+            -PrexSdkDir="$SDK_DIR" \
+            -Pandroid.aapt2FromMavenOverride="$AAPT2"
+
+      - name: Collect APK
+        run: |
+          apk="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$apk"
+          mkdir -p out/apk "$W/_out"
+          name="carbon-android-arm64-${GITHUB_SHA::8}.apk"
+          cp "$apk" "out/apk/$name"
+          cp "$apk" "$W/_out/$name"
+          {
+            echo "### Carbon APK built"
+            echo "- File on runner: \`$W/_out/$name\`"
+            echo "- SHA-256: \`$(sha256sum "$apk" | cut -d' ' -f1)\`"
+            echo "- Size: $(du -h "$apk" | cut -f1)"
+            if [ -f "$DUMP_FILE" ]; then echo "- Small-entry recovery: applied"; else echo "- Small-entry recovery: SKIPPED (no dump)"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK (opt-in)
+        if: inputs.upload_apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: carbon-android-arm64-apk
+          path: out/apk/*.apk
+          retention-days: 3
+
