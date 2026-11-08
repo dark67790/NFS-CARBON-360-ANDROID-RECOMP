@@ -447,9 +447,81 @@ jobs:
               return len(patched)
 
 
+          PTR_FNS = ("CopyImage", "BlitImage", "ClearDepthStencilImage")
+
+
+          def find_pointer_names():
+              """Names of the members/variables the renderer fills with vkGetDeviceProcAddr(.., "vkCmdXxx")."""
+              found = {}
+              for f in sorted(SRC.glob("*.cpp")):
+                  lines = f.read_text().split("\n")
+                  for fn in PTR_FNS:
+                      key = '"vkCmd%s"' % fn
+                      for i, l in enumerate(lines):
+                          if key not in l:
+                              continue
+                          if l.lstrip().startswith("//") or "REXLOG" in l:
+                              continue
+                          ctx = " ".join(x.strip() for x in lines[max(0, i - 5):i + 1])
+                          names = re.findall(r"([A-Za-z_]\w*)\s*=(?!=)", ctx)
+                          if not names:
+                              print("  ?? no assignment target found for %s in %s:%d, context: %s" % (fn, f.name, i + 1, ctx[-300:]))
+                              continue
+                          found.setdefault(fn, set()).add(names[-1])
+                          print("  pointer for vkCmd%s in %s:%d is '%s'" % (fn, f.name, i + 1, names[-1]))
+              return found
+
+
+          def patch_pointer_calls():
+              names = find_pointer_names()
+              if "CopyImage" not in names:
+                  fail("could not find how vkCmdCopyImage is loaded (see the '??' lines above)")
+              patched_total = 0
+              copy_patched = 0
+              for f in sorted(SRC.glob("*.cpp")):
+                  text = f.read_text()
+                  lines = text.split("\n")
+                  out, n_here = [], 0
+                  for n, line in enumerate(lines):
+                      hit = None
+                      for fn, nms in names.items():
+                          for nm in nms:
+                              m = re.match(r"^(?P<ind>[ \t]*)(?:[A-Za-z_]\w*(?:\.|->))*" + re.escape(nm) +
+                                           r"\(\s*(?P<cmd>[A-Za-z_][\w\[\]\.>\-]*)\s*,", line)
+                              if m:
+                                  hit = (fn, nm, m)
+                      if hit:
+                          fn, nm, m = hit
+                          prev = prev_code(lines, n)
+                          if prev.endswith((";", "{", "}")) and "BarreraTransferencias" not in prev:
+                              out.append("%s::nfsmw::nativo::BarreraTransferencias(dfn_, %s);  // %s" % (
+                                  m.group("ind"), m.group("cmd"), MARK))
+                              n_here += 1
+                              print("   + %s:%d  %s(%s) via '%s'" % (f.name, n + 1, fn, m.group("cmd"), nm))
+                              if fn == "CopyImage":
+                                  copy_patched += 1
+                          else:
+                              print("   - SKIPPED %s:%d  %s (previous line ends: ...%s)" % (f.name, n + 1, fn, prev[-40:]))
+                      out.append(line)
+                  if n_here:
+                      if "nfsmw_nativo_sincronizacion.h" not in text:
+                          k = last_include_index(out)
+                          out[k + 1:k + 1] = ['#include "nfsmw_nativo_sincronizacion.h"  // ' + MARK]
+                      f.write_text("\n".join(out))
+                      patched_total += n_here
+              if copy_patched == 0:
+                  fail("found the vkCmdCopyImage pointer but no call to it that could be patched")
+              print("pointer-based transfer calls patched: %d (CopyImage: %d)" % (patched_total, copy_patched))
+              return patched_total
+
+
           results = [patch_cpp("nfsmw_nativo_destinos.cpp"),
                      patch_cpp("nfsmw_nativo_dibujos.cpp")]
           place_define()
+          if all(r is None for r in results):
+              print("pointer-based calls: already patched or skipped")
+          else:
+              results.append(patch_pointer_calls())
           done = [r for r in results if r is not None]
           if not done:
               print("OK: nothing to do, already patched")
@@ -460,72 +532,83 @@ jobs:
               print("OK: %d transfer call sites now have a barrier before them" % total)
           PY
 
-      - name: Apply victorgbd's Vulkan pipeline-cache + dedicated-present-queue patches
+      - name: Patch SDK presenter - one present semaphore per swapchain image
         run: |
-          rm -rf "$RUNNER_TEMP/victorgbd-src"
-          git clone --depth 1 https://github.com/victorgbd/NFSMW-Recompiled-Mobile.git "$RUNNER_TEMP/victorgbd-src"
-          NFSMW_SDK="$SDK_DIR" python3 "$RUNNER_TEMP/victorgbd-src/tools/parche_cache_pipelines.py"
+          cd "$W"
+          python - <<'PY'
+          import pathlib, re, sys
 
-          python3 - <<'PY'
-          import os, pathlib, re, sys
+          MARK = "carbon-ci-present-semaphores"
+          SDK = pathlib.Path("nfsmw-android/sdk")
+          CPP = SDK / "src/ui/vulkan/vulkan_presenter.cpp"
+          HDR = SDK / "include/rex/ui/vulkan/presenter.h"
 
-          sdk = pathlib.Path(os.environ["SDK_DIR"])
-          MARK = "carbon-ci-present-queue"
 
-          # vulkan_device.cpp: create a second queue for the presenting family if it has one.
-          dev = sdk / "src/ui/vulkan/vulkan_device.cpp"
-          text = dev.read_text()
-          if MARK not in text:
-              old = (
-                  "      if (queue_family.may_support_presentation) {\n"
-                  "        queue_family.queues.resize(std::max(size_t(1), queue_family.queues.size()));\n"
-                  "        has_presentation_queue_family = true;\n"
-                  "      }\n"
-              )
-              new = (
-                  "      if (queue_family.may_support_presentation) {\n"
-                  f"        // {MARK}: a second queue, if the family has one, for vkQueuePresentKHR.\n"
-                  "        const size_t colas_presentar = queue_family_properties.queueCount >= 2 ? 2 : 1;\n"
-                  "        queue_family.queues.resize(std::max(colas_presentar, queue_family.queues.size()));\n"
-                  "        has_presentation_queue_family = true;\n"
-                  "      }\n"
-              )
-              if text.count(old) != 1:
-                  sys.exit(f"vulkan_device.cpp anchor not found exactly once ({text.count(old)} matches)")
-              dev.write_text(text.replace(old, new, 1))
-              print("patched vulkan_device.cpp (second present queue)")
-          else:
-              print("vulkan_device.cpp already patched")
+          def fail(msg):
+              sys.exit("PATCH FAILED: " + msg)
 
-          # vulkan_presenter.cpp: present on the second queue when it exists.
-          pres = sdk / "src/ui/vulkan/vulkan_presenter.cpp"
-          text = pres.read_text()
-          if MARK not in text:
-              pattern = re.compile(
-                  r'( *)const VulkanDevice::Queue::Acquisition queue_acquisition =\n'
-                  r' *vulkan_device_->AcquireQueue\(paint_context_\.present_queue_family, 0\);\n'
-              )
-              matches = list(pattern.finditer(text))
-              if len(matches) != 1:
-                  sys.exit(f"vulkan_presenter.cpp anchor not found exactly once ({len(matches)} matches)")
-              indent = matches[0].group(1)
-              new = (
-                  f"{indent}// {MARK}: present on the family's second queue when it has one, instead of\n"
-                  f"{indent}// sharing queue 0 with the command processor's submissions. vkQueuePresentKHR can\n"
-                  f"{indent}// block waiting on the previous frame's fence (queueBuffer on Android); on queue 0\n"
-                  f"{indent}// that stalls the command processor behind it.\n"
-                  f"{indent}const uint32_t carbon_present_queue_index =\n"
-                  f"{indent}    vulkan_device_->queue_families()[paint_context_.present_queue_family].queues.size() > 1\n"
-                  f"{indent}        ? 1\n"
-                  f"{indent}        : 0;\n"
-                  f"{indent}const VulkanDevice::Queue::Acquisition queue_acquisition =\n"
-                  f"{indent}    vulkan_device_->AcquireQueue(paint_context_.present_queue_family, carbon_present_queue_index);\n"
-              )
-              text = pattern.sub(lambda m: new, text, count=1)
-              pres.write_text(text)
-              print("patched vulkan_presenter.cpp (present queue)")
-          else:
-              print("vulkan_presenter.cpp already patched")
+
+          cpp = CPP.read_text()
+          hdr = HDR.read_text()
+          if MARK in cpp and MARK in hdr:
+              print("presenter already patched")
+              sys.exit(0)
+
+          # 1) header: one semaphore per swapchain image
+          m = re.findall(r"^([ \t]*)std::vector<VkFramebuffer>\s+swapchain_framebuffers\s*;[^\n]*$", hdr, re.M)
+          if len(m) != 1:
+              lines = [l for l in hdr.split("\n") if "swapchain_" in l]
+              fail("expected exactly one 'std::vector<VkFramebuffer> swapchain_framebuffers;' in presenter.h, found %d. "
+                   "Lines mentioning swapchain_: %s" % (len(m), lines[:12]))
+          hdr = re.sub(r"^([ \t]*)(std::vector<VkFramebuffer>\s+swapchain_framebuffers\s*;[^\n]*)$",
+                       lambda mm: mm.group(1) + mm.group(2) + "\n" + mm.group(1) +
+                       "std::vector<VkSemaphore> semaforos_presentar;  // " + MARK,
+                       hdr, count=1, flags=re.M)
+
+          # 2) destroy them with the swapchain
+          pat = re.compile(r"(dfn\.vkDestroyRenderPass\(device, paint_context_\.swapchain_render_pass, nullptr\);\s*\n[ \t]*\}\n)")
+          if len(pat.findall(cpp)) != 1:
+              fail("destroy anchor (vkDestroyRenderPass swapchain_render_pass) not found exactly once")
+          cpp = pat.sub(lambda mm: mm.group(1) + '''  // %s
+            for (VkSemaphore semaforo : paint_context_.semaforos_presentar) {
+              dfn.vkDestroySemaphore(device, semaforo, nullptr);
+            }
+            paint_context_.semaforos_presentar.clear();
+          ''' % MARK, cpp, count=1)
+
+          # 3) create them once the swapchain images exist
+          anchor = "  // Create the image views and the framebuffers.\n"
+          if cpp.count(anchor) != 1:
+              fail("create anchor '// Create the image views and the framebuffers.' not found exactly once")
+          cpp = cpp.replace(anchor, '''  // %s: one present semaphore per swapchain image. A semaphore signaled by a submission
+            // must not be reused while a presentation may still be waiting on it. If one cannot be created, the
+            // images without one keep using their submission's semaphore, as before.
+            {
+              VkSemaphoreCreateInfo info_semaforo{};
+              info_semaforo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+              while (paint_context_.semaforos_presentar.size() < paint_context_.swapchain_images.size()) {
+                VkSemaphore semaforo;
+                if (dfn.vkCreateSemaphore(device, &info_semaforo, nullptr, &semaforo) != VK_SUCCESS) {
+                  REXLOG_WARN("VulkanPresenter: could not create a present semaphore per image");
+                  break;
+                }
+                paint_context_.semaforos_presentar.push_back(semaforo);
+              }
+            }
+
+          ''' % MARK + anchor, 1)
+
+          # 4) use them at submit time
+          old = "VkSemaphore present_semaphore = paint_submission.present_semaphore();"
+          if cpp.count(old) != 1:
+              fail("submit anchor 'VkSemaphore present_semaphore = paint_submission.present_semaphore();' not found exactly once")
+          cpp = cpp.replace(old, '''VkSemaphore present_semaphore = swapchain_image_index < paint_context_.semaforos_presentar.size()
+                                                ? paint_context_.semaforos_presentar[swapchain_image_index]
+                                                : paint_submission.present_semaphore();  // ''' + MARK, 1)
+
+          CPP.write_text(cpp)
+          HDR.write_text(hdr)
+          print("presenter patched: header member + create/destroy + per-image semaphore at submit")
           PY
 
       - name: Link game copy next to the repo
