@@ -288,6 +288,140 @@ jobs:
             touch "$stamp"
           fi
 
+      - name: Patch renderer - barriers between transfer commands (Qualcomm corruption fix)
+        run: |
+          cd "$W"
+          python - <<'PY'
+          import pathlib, re, sys
+
+          SRC = pathlib.Path("nfsmw-android/app/src")
+          MARK = "carbon-ci-transfer-barriers"
+          CVAR = "nfsmw_nativo_barreras_transferencia"
+
+          FUNC = '''// %s: Vulkan does not order two transfer commands in a row (copy -> clear, copy -> copy,
+          // clear -> copy) without a barrier. Some drivers (Qualcomm Adreno 730) overlap them, which
+          // shows up as blocks of garbage on reflective surfaces.
+          template <typename Funciones>
+          inline void BarreraTransferencias(const Funciones& dfn, VkCommandBuffer comandos) {
+            if (!REXCVAR_GET(%s)) {
+              return;
+            }
+            VkMemoryBarrier barrera{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            barrera.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrera.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            dfn.vkCmdPipelineBarrier(comandos, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
+                                     &barrera, 0, nullptr, 0, nullptr);
+          }
+
+          ''' % (MARK, CVAR)
+
+          DEFINE = '''REXCVAR_DEFINE_BOOL(%s, true, "NFSMW",
+                              "Barrier between consecutive transfer commands (copy/clear). Fixes graphical corruption on "
+                              "Qualcomm drivers. %s");
+          ''' % (CVAR, MARK)
+
+          SITE = re.compile(
+              r'^(?P<ind>[ \t]*)(?P<obj>[A-Za-z_]\w*)\.vkCmd'
+              r'(?P<fn>CopyBufferToImage|CopyImageToBuffer|CopyImage|BlitImage|ClearColorImage|'
+              r'ClearDepthStencilImage|ResolveImage|CopyBuffer|FillBuffer|UpdateBuffer)'
+              r'\(\s*(?P<cmd>[A-Za-z_][\w\[\]\.>\-]*)\s*,')
+
+
+          def fail(msg):
+              sys.exit("PATCH FAILED: " + msg)
+
+
+          # 1) header: declaration + helper
+          h = SRC / "nfsmw_nativo_sincronizacion.h"
+          t = h.read_text()
+          if MARK not in t:
+              decl = "REXCVAR_DECLARE(bool, nfsmw_nativo_sincronizacion_gpu);"
+              end = "}  // namespace nfsmw::nativo"
+              if decl not in t:
+                  fail("anchor not found in nfsmw_nativo_sincronizacion.h: " + decl)
+              if end not in t:
+                  fail("anchor not found in nfsmw_nativo_sincronizacion.h: " + end)
+              t = t.replace(decl, decl + "\nREXCVAR_DECLARE(bool, %s);  // %s" % (CVAR, MARK), 1)
+              i = t.rfind(end)
+              t = t[:i] + FUNC + t[i:]
+              h.write_text(t)
+              print("header patched")
+          else:
+              print("header already patched")
+
+
+          def last_include_index(lines, limit=200):
+              last = -1
+              for k, l in enumerate(lines[:limit]):
+                  if l.lstrip().startswith("#include"):
+                      last = k
+              return last
+
+
+          def prev_code(lines, i):
+              j = i - 1
+              while j >= 0:
+                  s = lines[j].strip()
+                  if s and not s.startswith("//") and not s.startswith("*") and not s.startswith("/*"):
+                      return s
+                  j -= 1
+              return ""
+
+
+          def patch_cpp(name, add_define):
+              p = SRC / name
+              text = p.read_text()
+              if MARK in text:
+                  print(name + ": already patched")
+                  return None
+              lines = text.split("\n")
+              patched, skipped = [], []
+              out = []
+              for n, line in enumerate(lines):
+                  m = SITE.match(line)
+                  if m:
+                      prev = prev_code(lines, n)
+                      if prev.endswith((";", "{", "}")) and "BarreraTransferencias" not in prev:
+                          out.append("%s::nfsmw::nativo::BarreraTransferencias(%s, %s);  // %s" % (
+                              m.group("ind"), m.group("obj"), m.group("cmd"), MARK))
+                          patched.append((n + 1, m.group("fn"), m.group("cmd")))
+                      else:
+                          skipped.append((n + 1, m.group("fn"), prev[-40:]))
+                  out.append(line)
+              lines = out
+              # include of the header + cvar definition
+              ins = []
+              if "nfsmw_nativo_sincronizacion.h" not in text:
+                  ins.append('#include "nfsmw_nativo_sincronizacion.h"  // ' + MARK)
+              if add_define:
+                  ins.append("")
+                  ins.extend(DEFINE.rstrip("\n").split("\n"))
+              if ins:
+                  k = last_include_index(lines)
+                  if k < 0:
+                      fail("no #include found near the top of " + name)
+                  lines[k + 1:k + 1] = ins
+              p.write_text("\n".join(lines))
+              print("%s: %d sites patched, %d skipped" % (name, len(patched), len(skipped)))
+              for ln, fn, cmd in patched:
+                  print("   + line %d  %s(%s)" % (ln, fn, cmd))
+              for ln, fn, pv in skipped:
+                  print("   - SKIPPED line %d  %s  (previous line ends: ...%s)" % (ln, fn, pv))
+              return len(patched)
+
+
+          results = [patch_cpp("nfsmw_nativo_destinos.cpp", add_define=False),
+                     patch_cpp("nfsmw_nativo_dibujos.cpp", add_define=True)]
+          done = [r for r in results if r is not None]
+          if not done:
+              print("OK: nothing to do, already patched")
+          else:
+              total = sum(done)
+              if total < 3:
+                  fail("only %d transfer call sites patched (expected at least 3); the renderer code changed?" % total)
+              print("OK: %d transfer call sites now have a barrier before them" % total)
+          PY
+
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
