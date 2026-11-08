@@ -460,6 +460,13 @@ jobs:
               print("OK: %d transfer call sites now have a barrier before them" % total)
           PY
 
+      - name: Apply victorgbd's Vulkan pipeline-cache + dedicated-present-queue patches
+        run: |
+          rm -rf "$RUNNER_TEMP/victorgbd-src"
+          git clone --depth 1 https://github.com/victorgbd/NFSMW-Recompiled-Mobile.git "$RUNNER_TEMP/victorgbd-src"
+          NFSMW_SDK="$SDK_DIR" python3 "$RUNNER_TEMP/victorgbd-src/tools/parche_cache_pipelines.py"
+          NFSMW_SDK="$SDK_DIR" python3 "$RUNNER_TEMP/victorgbd-src/tools/parche_cola_presentar.py"
+
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
