@@ -554,13 +554,14 @@ jobs:
               print("presenter already patched")
               sys.exit(0)
 
-          # 1) header: one semaphore per swapchain image
-          m = re.findall(r"^([ \t]*)std::vector<VkFramebuffer>\s+swapchain_framebuffers\s*;[^\n]*$", hdr, re.M)
+          # 1) header: one semaphore per swapchain image (declared next to swapchain_images)
+          HDR_RE = r"^([ \t]*)(std::vector<VkImage>\s+swapchain_images\s*;[^\n]*)$"
+          m = re.findall(HDR_RE, hdr, re.M)
           if len(m) != 1:
               lines = [l for l in hdr.split("\n") if "swapchain_" in l]
-              fail("expected exactly one 'std::vector<VkFramebuffer> swapchain_framebuffers;' in presenter.h, found %d. "
+              fail("expected exactly one 'std::vector<VkImage> swapchain_images;' in presenter.h, found %d. "
                    "Lines mentioning swapchain_: %s" % (len(m), lines[:12]))
-          hdr = re.sub(r"^([ \t]*)(std::vector<VkFramebuffer>\s+swapchain_framebuffers\s*;[^\n]*)$",
+          hdr = re.sub(HDR_RE,
                        lambda mm: mm.group(1) + mm.group(2) + "\n" + mm.group(1) +
                        "std::vector<VkSemaphore> semaforos_presentar;  // " + MARK,
                        hdr, count=1, flags=re.M)
