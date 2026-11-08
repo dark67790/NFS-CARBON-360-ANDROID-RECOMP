@@ -33,6 +33,10 @@ on:
         description: "Upload the APK as an artifact (visible to anyone who can see the repo)"
         type: boolean
         default: false
+      validation_layer:
+        description: "TEST BUILD: bundle the Khronos Vulkan validation layer (bigger and slower APK)"
+        type: boolean
+        default: false
 
 concurrency:
   group: carbon-android-arm64
@@ -456,43 +460,6 @@ jobs:
               print("OK: %d transfer call sites now have a barrier before them" % total)
           PY
 
-      - name: Patch pipeline_cache.cpp for concurrent pipeline-creation corruption
-        run: |
-          python - <<'PY'
-          import os, pathlib, re, sys
-          p = pathlib.Path(os.environ["SDK_DIR"]) / "src" / "graphics" / "vulkan" / "pipeline_cache.cpp"
-          if not p.is_file():
-              sys.exit(f"pipeline_cache.cpp not found at {p} (SDK_DIR={os.environ.get('SDK_DIR')!r})")
-          text = p.read_text()
-          if "carbon-ci-pipeline-mutex" in text:
-              print("already patched"); sys.exit(0)
-          pattern = re.compile(
-              r'VkResult create_result = dfn\.vkCreateGraphicsPipelines\(device, VK_NULL_HANDLE, 1,\s*\n'
-              r'\s*&pipeline_create_info, nullptr, &pipeline\);'
-          )
-          matches = pattern.findall(text)
-          if len(matches) != 1:
-              sys.exit(f"pattern not found exactly once ({len(matches)} matches): pipeline_cache.cpp changed upstream?")
-          replacement = (
-              "VkResult create_result;\n"
-              "  {\n"
-              "    // carbon-ci-pipeline-mutex: some Adreno driver builds corrupt rendering when\n"
-              "    // vkCreateGraphicsPipelines is called concurrently from multiple threads with no\n"
-              "    // shared VkPipelineCache (confirmed: clean with vulkan_pipeline_creation_threads=1,\n"
-              "    // corrupted at 2+; disabling pipeline prewarm alone does not fix it, so this is the\n"
-              "    // thread pool vulkan_pipeline_creation_threads actually controls). Serialize only the\n"
-              "    // driver call; shader translation/setup above this point stays parallel across threads.\n"
-              "    static std::mutex driver_pipeline_create_mutex;\n"
-              "    std::lock_guard<std::mutex> driver_pipeline_create_lock(driver_pipeline_create_mutex);\n"
-              "    create_result = dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,\n"
-              "                                                   &pipeline_create_info, nullptr, &pipeline);\n"
-              "  }"
-          )
-          text = pattern.sub(replacement, text, count=1)
-          p.write_text(text)
-          print("patched pipeline_cache.cpp")
-          PY
-
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
@@ -555,40 +522,21 @@ jobs:
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
 
-      - name: Fetch Khronos Vulkan validation layer (Android arm64) for diagnostics
+      - name: Validation layer (test builds only)
+        env:
+          WITH_VALIDATION: ${{ inputs.validation_layer }}
         run: |
-          set -e
-          curl -sSf https://api.github.com/repos/KhronosGroup/Vulkan-ValidationLayers/releases/latest -o /tmp/vvl_release.json
-          asset_url=$(python3 - <<'PY'
-          import json
-          with open('/tmp/vvl_release.json') as f:
-              d = json.load(f)
-          candidates = [a['browser_download_url'] for a in d.get('assets', [])
-                        if 'android' in a['name'].lower()]
-          if not candidates:
-              raise SystemExit('No Android asset found in latest Vulkan-ValidationLayers release')
-          print(candidates[0])
-          PY
-          )
-          echo "Downloading: $asset_url"
-          curl -sSfL "$asset_url" -o /tmp/vvl_android.archive
-          mkdir -p /tmp/vvl_extracted && cd /tmp/vvl_extracted
-          case "$asset_url" in
-            *.zip) unzip -q /tmp/vvl_android.archive ;;
-            *) tar xf /tmp/vvl_android.archive ;;
-          esac
-          so_path=$(find /tmp/vvl_extracted -path "*arm64-v8a*" -iname "libVkLayer_khronos_validation.so" | head -1)
-          if [ -z "$so_path" ]; then
-            echo "Could not find arm64-v8a libVkLayer_khronos_validation.so"; find /tmp/vvl_extracted -iname "*.so"; exit 1
+          dest="android/app/src/main/jniLibs/arm64-v8a"
+          src="$W/nfsmw-android/android/app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so"
+          if [ "$WITH_VALIDATION" = "true" ]; then
+            [ -f "$src" ] || { echo "::error::Validation layer not found at $src"; exit 1; }
+            mkdir -p "$dest"
+            cp "$src" "$dest/"
+            echo "Validation layer bundled:"; ls -l "$dest/libVkLayer_khronos_validation.so"
+          else
+            rm -f "$dest/libVkLayer_khronos_validation.so"
+            echo "Normal build: no validation layer"
           fi
-          manifest=$(find "$W" -maxdepth 6 -type f -name "AndroidManifest.xml" -path "*/src/main/*" | grep -v jniLibs | head -1)
-          if [ -z "$manifest" ]; then
-            echo "Could not locate AndroidManifest.xml under \$W"; exit 1
-          fi
-          jnilibs_dir="$(dirname "$manifest")/jniLibs/arm64-v8a"
-          mkdir -p "$jnilibs_dir"
-          cp "$so_path" "$jnilibs_dir/libVkLayer_khronos_validation.so"
-          echo "Installed validation layer to: $jnilibs_dir"
 
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
@@ -601,11 +549,15 @@ jobs:
             -Pandroid.aapt2FromMavenOverride="$AAPT2"
 
       - name: Collect APK
+        env:
+          WITH_VALIDATION: ${{ inputs.validation_layer }}
         run: |
           apk="android/app/build/outputs/apk/release/app-release.apk"
           test -f "$apk"
           mkdir -p out/apk "$W/_out"
-          name="carbon-android-arm64-${GITHUB_SHA::8}.apk"
+          suffix=""
+          [ "$WITH_VALIDATION" = "true" ] && suffix="-validation"
+          name="carbon-android-arm64-${GITHUB_SHA::8}-run${GITHUB_RUN_NUMBER}${suffix}.apk"
           cp "$apk" "out/apk/$name"
           cp "$apk" "$W/_out/$name"
           {
