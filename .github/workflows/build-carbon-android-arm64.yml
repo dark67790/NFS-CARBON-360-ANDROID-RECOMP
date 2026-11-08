@@ -37,6 +37,10 @@ on:
         description: "TEST BUILD: bundle the Khronos Vulkan validation layer (bigger and slower APK)"
         type: boolean
         default: false
+      revert_054_renderer:
+        description: "TEST BUILD: undo the 0.5.4 changes to the renderer draw code (may crash when a race loads)"
+        type: boolean
+        default: false
 
 concurrency:
   group: carbon-android-arm64
@@ -291,6 +295,17 @@ jobs:
             python nfsmw-android/tools/fetch_thirdparty.py
             touch "$stamp"
           fi
+
+      - name: TEST - undo the 0.5.4 renderer changes (bisect)
+        if: inputs.revert_054_renderer
+        run: |
+          cd "$W/nfsmw-android"
+          git diff "$NFSMW_ANDROID_SHA~1" "$NFSMW_ANDROID_SHA" -- app/src/nfsmw_nativo_dibujos.cpp app/src/nfsmw_espera_fotograma.cpp > "$RUNNER_TEMP/054.patch"
+          echo "patch size: $(wc -l < "$RUNNER_TEMP/054.patch") lines"
+          [ -s "$RUNNER_TEMP/054.patch" ] || { echo "::error::empty patch, is the git history available?"; exit 1; }
+          git apply -R --check "$RUNNER_TEMP/054.patch" || { echo "::error::the 0.5.4 changes do not revert cleanly"; exit 1; }
+          git apply -R "$RUNNER_TEMP/054.patch"
+          git diff --stat
 
       - name: Patch renderer - barriers between transfer commands (Qualcomm corruption fix)
         run: |
@@ -703,12 +718,14 @@ jobs:
       - name: Collect APK
         env:
           WITH_VALIDATION: ${{ inputs.validation_layer }}
+          REVERT_054: ${{ inputs.revert_054_renderer }}
         run: |
           apk="android/app/build/outputs/apk/release/app-release.apk"
           test -f "$apk"
           mkdir -p out/apk "$W/_out"
           suffix=""
-          [ "$WITH_VALIDATION" = "true" ] && suffix="-validation"
+          [ "$WITH_VALIDATION" = "true" ] && suffix="${suffix}-validation"
+          [ "$REVERT_054" = "true" ] && suffix="${suffix}-rev054"
           name="carbon-android-arm64-${GITHUB_SHA::8}-run${GITHUB_RUN_NUMBER}${suffix}.apk"
           cp "$apk" "out/apk/$name"
           cp "$apk" "$W/_out/$name"
