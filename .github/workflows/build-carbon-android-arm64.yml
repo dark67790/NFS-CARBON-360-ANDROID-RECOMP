@@ -368,7 +368,43 @@ jobs:
               return ""
 
 
-          def patch_cpp(name, add_define):
+          def place_define():
+              # The definition must live where an existing cvar of the same header is defined: same scope,
+              # and certainly part of the build.
+              files = sorted(SRC.glob("*.cpp"))
+              for f in files:
+                  if ("REXCVAR_DEFINE_BOOL(" + CVAR) in f.read_text():
+                      print("cvar definition already present in " + f.name)
+                      return
+              target = None
+              for f in files:
+                  lines = f.read_text().split("\n")
+                  for k, l in enumerate(lines):
+                      if "REXCVAR_DEFINE_BOOL(nfsmw_nativo_sincronizacion_gpu" in l:
+                          target = (f, lines, k)
+                          break
+                  if target:
+                      break
+              if target is None:
+                  order = [SRC / "nfsmw_nativo_destinos.cpp", SRC / "nfsmw_nativo_dibujos.cpp"] + files
+                  for f in order:
+                      lines = f.read_text().split("\n")
+                      k = next((i for i, l in enumerate(lines) if l.lstrip().startswith("REXCVAR_DEFINE_BOOL(")), None)
+                      if k is not None:
+                          target = (f, lines, k)
+                          break
+                  if target is None:
+                      fail("no REXCVAR_DEFINE_BOOL found to place the new cvar next to")
+              f, lines, k = target
+              j = k
+              while j > 0 and lines[j - 1].strip().startswith(("//", "*", "/*")):
+                  j -= 1
+              lines[j:j] = DEFINE.rstrip("\n").split("\n") + [""]
+              f.write_text("\n".join(lines))
+              print("cvar %s defined in %s before line %d" % (CVAR, f.name, j + 1))
+
+
+          def patch_cpp(name):
               p = SRC / name
               text = p.read_text()
               if MARK in text:
@@ -393,9 +429,6 @@ jobs:
               ins = []
               if "nfsmw_nativo_sincronizacion.h" not in text:
                   ins.append('#include "nfsmw_nativo_sincronizacion.h"  // ' + MARK)
-              if add_define:
-                  ins.append("")
-                  ins.extend(DEFINE.rstrip("\n").split("\n"))
               if ins:
                   k = last_include_index(lines)
                   if k < 0:
@@ -410,8 +443,9 @@ jobs:
               return len(patched)
 
 
-          results = [patch_cpp("nfsmw_nativo_destinos.cpp", add_define=False),
-                     patch_cpp("nfsmw_nativo_dibujos.cpp", add_define=True)]
+          results = [patch_cpp("nfsmw_nativo_destinos.cpp"),
+                     patch_cpp("nfsmw_nativo_dibujos.cpp")]
+          place_define()
           done = [r for r in results if r is not None]
           if not done:
               print("OK: nothing to do, already patched")
