@@ -555,6 +555,42 @@ jobs:
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
 
+      - name: Fetch Khronos Vulkan validation layer (Android arm64) for diagnostics
+        run: |
+          set -e
+          curl -sSf https://api.github.com/repos/KhronosGroup/Vulkan-ValidationLayers/releases/latest -o /tmp/vvl_release.json
+          asset_url=$(python3 - <<'PY'
+          import json
+          with open('/tmp/vvl_release.json') as f:
+              d = json.load(f)
+          candidates = [a['browser_download_url'] for a in d.get('assets', [])
+                        if 'android' in a['name'].lower()]
+          if not candidates:
+              raise SystemExit('No Android asset found in latest Vulkan-ValidationLayers release')
+          print(candidates[0])
+          PY
+          )
+          echo "Downloading: $asset_url"
+          curl -sSfL "$asset_url" -o /tmp/vvl_android.archive
+          mkdir -p /tmp/vvl_extracted && cd /tmp/vvl_extracted
+          if file /tmp/vvl_android.archive | grep -qi zip; then
+            unzip -q /tmp/vvl_android.archive
+          else
+            tar xf /tmp/vvl_android.archive
+          fi
+          so_path=$(find /tmp/vvl_extracted -path "*arm64-v8a*" -iname "libVkLayer_khronos_validation.so" | head -1)
+          if [ -z "$so_path" ]; then
+            echo "Could not find arm64-v8a libVkLayer_khronos_validation.so"; find /tmp/vvl_extracted -iname "*.so"; exit 1
+          fi
+          manifest=$(find "$W" -maxdepth 6 -type f -name "AndroidManifest.xml" -path "*/src/main/*" | grep -v jniLibs | head -1)
+          if [ -z "$manifest" ]; then
+            echo "Could not locate AndroidManifest.xml under \$W"; exit 1
+          fi
+          jnilibs_dir="$(dirname "$manifest")/jniLibs/arm64-v8a"
+          mkdir -p "$jnilibs_dir"
+          cp "$so_path" "$jnilibs_dir/libVkLayer_khronos_validation.so"
+          echo "Installed validation layer to: $jnilibs_dir"
+
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
           cd android
