@@ -459,8 +459,10 @@ jobs:
       - name: Patch pipeline_cache.cpp for concurrent pipeline-creation corruption
         run: |
           python - <<'PY'
-          import pathlib, re, sys
-          p = pathlib.Path("nfsmw-android/sdk/src/graphics/vulkan/pipeline_cache.cpp")
+          import os, pathlib, re, sys
+          p = pathlib.Path(os.environ["SDK_DIR"]) / "src" / "graphics" / "vulkan" / "pipeline_cache.cpp"
+          if not p.is_file():
+              sys.exit(f"pipeline_cache.cpp not found at {p} (SDK_DIR={os.environ.get('SDK_DIR')!r})")
           text = p.read_text()
           if "carbon-ci-pipeline-mutex" in text:
               print("already patched"); sys.exit(0)
