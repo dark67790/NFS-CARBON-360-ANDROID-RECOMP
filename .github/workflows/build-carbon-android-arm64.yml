@@ -465,7 +465,68 @@ jobs:
           rm -rf "$RUNNER_TEMP/victorgbd-src"
           git clone --depth 1 https://github.com/victorgbd/NFSMW-Recompiled-Mobile.git "$RUNNER_TEMP/victorgbd-src"
           NFSMW_SDK="$SDK_DIR" python3 "$RUNNER_TEMP/victorgbd-src/tools/parche_cache_pipelines.py"
-          NFSMW_SDK="$SDK_DIR" python3 "$RUNNER_TEMP/victorgbd-src/tools/parche_cola_presentar.py"
+
+          python3 - <<'PY'
+          import os, pathlib, re, sys
+
+          sdk = pathlib.Path(os.environ["SDK_DIR"])
+          MARK = "carbon-ci-present-queue"
+
+          # vulkan_device.cpp: create a second queue for the presenting family if it has one.
+          dev = sdk / "src/ui/vulkan/vulkan_device.cpp"
+          text = dev.read_text()
+          if MARK not in text:
+              old = (
+                  "      if (queue_family.may_support_presentation) {\n"
+                  "        queue_family.queues.resize(std::max(size_t(1), queue_family.queues.size()));\n"
+                  "        has_presentation_queue_family = true;\n"
+                  "      }\n"
+              )
+              new = (
+                  "      if (queue_family.may_support_presentation) {\n"
+                  f"        // {MARK}: a second queue, if the family has one, for vkQueuePresentKHR.\n"
+                  "        const size_t colas_presentar = queue_family_properties.queueCount >= 2 ? 2 : 1;\n"
+                  "        queue_family.queues.resize(std::max(colas_presentar, queue_family.queues.size()));\n"
+                  "        has_presentation_queue_family = true;\n"
+                  "      }\n"
+              )
+              if text.count(old) != 1:
+                  sys.exit(f"vulkan_device.cpp anchor not found exactly once ({text.count(old)} matches)")
+              dev.write_text(text.replace(old, new, 1))
+              print("patched vulkan_device.cpp (second present queue)")
+          else:
+              print("vulkan_device.cpp already patched")
+
+          # vulkan_presenter.cpp: present on the second queue when it exists.
+          pres = sdk / "src/ui/vulkan/vulkan_presenter.cpp"
+          text = pres.read_text()
+          if MARK not in text:
+              pattern = re.compile(
+                  r'( *)const VulkanDevice::Queue::Acquisition queue_acquisition =\n'
+                  r' *vulkan_device_->AcquireQueue\(paint_context_\.present_queue_family, 0\);\n'
+              )
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  sys.exit(f"vulkan_presenter.cpp anchor not found exactly once ({len(matches)} matches)")
+              indent = matches[0].group(1)
+              new = (
+                  f"{indent}// {MARK}: present on the family's second queue when it has one, instead of\n"
+                  f"{indent}// sharing queue 0 with the command processor's submissions. vkQueuePresentKHR can\n"
+                  f"{indent}// block waiting on the previous frame's fence (queueBuffer on Android); on queue 0\n"
+                  f"{indent}// that stalls the command processor behind it.\n"
+                  f"{indent}const uint32_t carbon_present_queue_index =\n"
+                  f"{indent}    vulkan_device_->queue_families()[paint_context_.present_queue_family].queues.size() > 1\n"
+                  f"{indent}        ? 1\n"
+                  f"{indent}        : 0;\n"
+                  f"{indent}const VulkanDevice::Queue::Acquisition queue_acquisition =\n"
+                  f"{indent}    vulkan_device_->AcquireQueue(paint_context_.present_queue_family, carbon_present_queue_index);\n"
+              )
+              text = pattern.sub(lambda m: new, text, count=1)
+              pres.write_text(text)
+              print("patched vulkan_presenter.cpp (present queue)")
+          else:
+              print("vulkan_presenter.cpp already patched")
+          PY
 
       - name: Link game copy next to the repo
         run: |
