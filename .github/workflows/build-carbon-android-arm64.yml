@@ -573,11 +573,10 @@ jobs:
           echo "Downloading: $asset_url"
           curl -sSfL "$asset_url" -o /tmp/vvl_android.archive
           mkdir -p /tmp/vvl_extracted && cd /tmp/vvl_extracted
-          if file /tmp/vvl_android.archive | grep -qi zip; then
-            unzip -q /tmp/vvl_android.archive
-          else
-            tar xf /tmp/vvl_android.archive
-          fi
+          case "$asset_url" in
+            *.zip) unzip -q /tmp/vvl_android.archive ;;
+            *) tar xf /tmp/vvl_android.archive ;;
+          esac
           so_path=$(find /tmp/vvl_extracted -path "*arm64-v8a*" -iname "libVkLayer_khronos_validation.so" | head -1)
           if [ -z "$so_path" ]; then
             echo "Could not find arm64-v8a libVkLayer_khronos_validation.so"; find /tmp/vvl_extracted -iname "*.so"; exit 1
