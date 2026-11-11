@@ -336,6 +336,67 @@ jobs:
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
 
+      - name: Patch - remove VisualTreatment motion blur (hook sub_82507370)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_WORKSPACE/src/carbon_nativo_ganchos.cpp" <<'PY'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          if "carbon-blur-hook" in s:
+              print("already patched")
+              sys.exit(0)
+          if "REX_HOOK_RAW(sub_826E4218)" not in s:
+              sys.exit("ANCHOR NOT FOUND: REX_HOOK_RAW(sub_826E4218)")
+          if "sub_82507370" in s:
+              sys.exit("sub_82507370 is already hooked in this file")
+          block = r'''
+          // carbon-blur-hook: VisualTreatment (visualtreatment.fx: DownScale2x2ForMotionBlur -> motionblur x3 ->
+          // composite_blur) is drawn by sub_82507370(r3 = effect state). The float at [r3 + 184] is the only per-frame value
+          // stored in the composite pass's parameter block (lfs f0,184(r26); stfs f0,144(r1)). It is zeroed for the duration
+          // of the call and restored afterwards.
+          #include <cstring>
+
+          #include <rex/cvar.h>
+
+          REXCVAR_DEFINE_BOOL(carbon_sin_desenfoque, true, "Carbon",
+                              "Remove the motion blur of the race VisualTreatment (zeroes the amount read by composite_blur)");
+          REXCVAR_DEFINE_BOOL(carbon_diag_desenfoque, false, "Carbon diagnostics",
+                              "Log the blur amount the game computes (about twice per second)");
+
+          REX_EXTERN(__imp__sub_82507370);
+          REX_HOOK_RAW(sub_82507370) {
+            const uint32_t estado = ctx.r3.u32;
+            if (!estado) {
+              __imp__sub_82507370(ctx, base);
+              return;
+            }
+            uint8_t* campo = base + estado + 184;
+            uint32_t guardado;
+            std::memcpy(&guardado, campo, sizeof(guardado));
+            if (REXCVAR_GET(carbon_diag_desenfoque)) {
+              static uint32_t llamadas = 0;
+              if ((llamadas++ % 30) == 0) {
+                const uint32_t host = __builtin_bswap32(guardado);
+                float valor;
+                std::memcpy(&valor, &host, sizeof(valor));
+                REXLOG_INFO("[carbon] desenfoque: campo +184 = {} (estado {:08X})", valor, estado);
+              }
+            }
+            if (REXCVAR_GET(carbon_sin_desenfoque)) {
+              std::memset(campo, 0, sizeof(guardado));
+            }
+            __imp__sub_82507370(ctx, base);
+            std::memcpy(campo, &guardado, sizeof(guardado));
+          }
+          '''
+          if not s.endswith("\n"):
+              s += "\n"
+          open(p, "w", encoding="utf-8").write(s + block)
+          print("patched")
+          PY
+
       - name: Validation layer (test builds only)
         env:
           WITH_VALIDATION: ${{ inputs.validation_layer }}
