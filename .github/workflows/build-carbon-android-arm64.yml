@@ -274,6 +274,83 @@ jobs:
             touch "$stamp"
           fi
 
+      - name: Patch - half-precision pixel shaders (nfsmw_nativo_media_precision, from victorgbd)
+        shell: bash
+        run: |
+          set -euo pipefail
+          NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android/app/src"
+          VSHA=3ac2fb698576d8889ade19660c38d0fd25f2c5a5
+          BASE="https://raw.githubusercontent.com/victorgbd/NFSMW-Recompiled-Mobile/$VSHA/nativo/app/src"
+          if [ ! -f "$NFS/nfsmw_spirv_precision.cpp" ]; then
+            curl -fsSL --retry 3 -o "$NFS/nfsmw_spirv_precision.cpp" "$BASE/nfsmw_spirv_precision.cpp"
+            curl -fsSL --retry 3 -o "$NFS/nfsmw_spirv_precision.h" "$BASE/nfsmw_spirv_precision.h"
+          fi
+          echo "09c61e5fc9f16f38aa072cdbcc12e4e0851ab4f4fc7bca8c7c5cff1277179421  $NFS/nfsmw_spirv_precision.cpp" | sha256sum -c -
+          echo "6062dd2e4074b5c793b376f9b8b4aab0476d56485aae760db424006cabb78928  $NFS/nfsmw_spirv_precision.h" | sha256sum -c -
+          python3 - "$NFS" "$GITHUB_WORKSPACE/CMakeLists.txt" <<'PY'
+          import sys
+          nfs, cmake = sys.argv[1], sys.argv[2]
+
+          def patch(path, edits):
+              s = open(path, encoding="utf-8").read()
+              for marker, old, new in edits:
+                  if marker in s:
+                      print("ya aplicado:", marker)
+                      continue
+                  n = s.count(old)
+                  if n != 1:
+                      sys.exit("ANCLA NO ENCONTRADA (%d veces) para %s: %r" % (n, marker, old[:60]))
+                  s = s.replace(old, new, 1)
+                  print("aplicado:", marker)
+              open(path, "w", encoding="utf-8").write(s)
+
+          patch(nfs + "/nfsmw_shader_library.h", [
+              ("carbon-prec-accessor",
+               "  const std::vector<Shader>& shaders() const { return shaders_; }\n",
+               "  const std::vector<Shader>& shaders() const { return shaders_; }\n"
+               "  // carbon-prec-accessor: to adjust the SPIR-V right after Cargar (nfsmw_nativo_media_precision).\n"
+               "  std::vector<Shader>& shaders_para_ajustar() { return shaders_; }\n"),
+          ])
+          patch(nfs + "/nfsmw_nativo_shaders.cpp", [
+              ("carbon-prec-inc1", '#include "nfsmw_shader_library.h"\n',
+               '#include "nfsmw_shader_library.h"\n#include "nfsmw_spirv_precision.h"  // carbon-prec-inc1\n'),
+              ("carbon-prec-inc2", "#include <rex/logging.h>\n",
+               "#include <rex/cvar.h>  // carbon-prec-inc2\n#include <rex/logging.h>\n"),
+              ("carbon-prec-cvar", "#include <xxhash.h>\n",
+               "#include <xxhash.h>\n\n"
+               "// carbon-prec-cvar (from victorgbd/NFSMW-Recompiled-Mobile)\n"
+               'REXCVAR_DEFINE_BOOL(nfsmw_nativo_media_precision, false, "NFSMW",\n'
+               '                    "Native renderer (test): the color math of the pixel shaders at 16 bits "\n'
+               '                    "(RelaxedPrecision). Adreno and Mali do twice the arithmetic per cycle; texture "\n'
+               '                    "coordinates, depth and whatever does not come from a texture stay at 32 bits. "\n'
+               '                    "May show banding in some effect")\n'
+               "    .lifecycle(rex::cvar::Lifecycle::kInitOnly);\n"),
+              ("carbon-prec-loop",
+               "    return false;\n  }\n  const auto& shaders = d.biblioteca.shaders();\n",
+               "    return false;\n  }\n"
+               "  // carbon-prec-loop: the pixel shaders' color math at 16 bits (see nfsmw_spirv_precision.h).\n"
+               "  if (REXCVAR_GET(nfsmw_nativo_media_precision)) {\n"
+               "    uint32_t shaders_tocados = 0;\n"
+               "    uint64_t resultados = 0;\n"
+               "    for (nfsmw::native::Shader& s : d.biblioteca.shaders_para_ajustar()) {\n"
+               "      if (!s.vertices) {\n"
+               "        const uint32_t marcados = RelajarPrecision(s.spirv);\n"
+               "        shaders_tocados += marcados ? 1 : 0;\n"
+               "        resultados += marcados;\n"
+               "      }\n"
+               "    }\n"
+               '    REXLOG_INFO("[nativo] C5a: media precision en {} pixel shaders ({} resultados a 16 bits)", shaders_tocados,\n'
+               "                resultados);\n"
+               "  }\n"
+               "  const auto& shaders = d.biblioteca.shaders();\n"),
+          ])
+          patch(cmake, [
+              ("carbon-prec-cmake",
+               "    ${NFSC_NFSMW_SRC}/nfsmw_shader_library.cpp\n",
+               "    ${NFSC_NFSMW_SRC}/nfsmw_shader_library.cpp\n    ${NFSC_NFSMW_SRC}/nfsmw_spirv_precision.cpp\n"),
+          ])
+          PY
+
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
