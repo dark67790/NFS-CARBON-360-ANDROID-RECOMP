@@ -274,81 +274,154 @@ jobs:
             touch "$stamp"
           fi
 
-      - name: Patch - half-precision pixel shaders (nfsmw_nativo_media_precision, from victorgbd)
+      - name: Patch - widescreen (carbon_aspect) resolution and Hor+ camera
         shell: bash
         run: |
           set -euo pipefail
-          NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android/app/src"
-          VSHA=3ac2fb698576d8889ade19660c38d0fd25f2c5a5
-          BASE="https://raw.githubusercontent.com/victorgbd/NFSMW-Recompiled-Mobile/$VSHA/nativo/app/src"
-          if [ ! -f "$NFS/nfsmw_spirv_precision.cpp" ]; then
-            curl -fsSL --retry 3 -o "$NFS/nfsmw_spirv_precision.cpp" "$BASE/nfsmw_spirv_precision.cpp"
-            curl -fsSL --retry 3 -o "$NFS/nfsmw_spirv_precision.h" "$BASE/nfsmw_spirv_precision.h"
-          fi
-          echo "09c61e5fc9f16f38aa072cdbcc12e4e0851ab4f4fc7bca8c7c5cff1277179421  $NFS/nfsmw_spirv_precision.cpp" | sha256sum -c -
-          echo "6062dd2e4074b5c793b376f9b8b4aab0476d56485aae760db424006cabb78928  $NFS/nfsmw_spirv_precision.h" | sha256sum -c -
-          python3 - "$NFS" "$GITHUB_WORKSPACE/CMakeLists.txt" <<'PY'
+          python3 - "$GITHUB_WORKSPACE/android/app/src/main/cpp/carbon_graphics.cpp" <<'PY'
           import sys
-          nfs, cmake = sys.argv[1], sys.argv[2]
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          if "carbon-widescreen" in s:
+              print("already patched")
+              sys.exit(0)
 
-          def patch(path, edits):
-              s = open(path, encoding="utf-8").read()
-              for marker, old, new in edits:
-                  if marker in s:
-                      print("ya aplicado:", marker)
-                      continue
-                  n = s.count(old)
-                  if n != 1:
-                      sys.exit("ANCLA NO ENCONTRADA (%d veces) para %s: %r" % (n, marker, old[:60]))
-                  s = s.replace(old, new, 1)
-                  print("aplicado:", marker)
-              open(path, "w", encoding="utf-8").write(s)
+          def once(old, new, what):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  sys.exit("ANCHOR %s: expected 1, found %d" % (what, n))
+              s = s.replace(old, new)
 
-          patch(nfs + "/nfsmw_shader_library.h", [
-              ("carbon-prec-accessor",
-               "  const std::vector<Shader>& shaders() const { return shaders_; }\n",
-               "  const std::vector<Shader>& shaders() const { return shaders_; }\n"
-               "  // carbon-prec-accessor: to adjust the SPIR-V right after Cargar (nfsmw_nativo_media_precision).\n"
-               "  std::vector<Shader>& shaders_para_ajustar() { return shaders_; }\n"),
-          ])
-          patch(nfs + "/nfsmw_nativo_shaders.cpp", [
-              ("carbon-prec-inc1", '#include "nfsmw_shader_library.h"\n',
-               '#include "nfsmw_shader_library.h"\n#include "nfsmw_spirv_precision.h"  // carbon-prec-inc1\n'),
-              ("carbon-prec-inc2", "#include <rex/logging.h>\n",
-               "#include <rex/cvar.h>  // carbon-prec-inc2\n#include <rex/logging.h>\n"),
-              ("carbon-prec-cvar", "#include <xxhash.h>\n",
-               "#include <xxhash.h>\n\n"
-               "// carbon-prec-cvar (from victorgbd/NFSMW-Recompiled-Mobile)\n"
-               'REXCVAR_DEFINE_BOOL(nfsmw_nativo_media_precision, false, "NFSMW",\n'
-               '                    "Native renderer (test): the color math of the pixel shaders at 16 bits "\n'
-               '                    "(RelaxedPrecision). Adreno and Mali do twice the arithmetic per cycle; texture "\n'
-               '                    "coordinates, depth and whatever does not come from a texture stay at 32 bits. "\n'
-               '                    "May show banding in some effect")\n'
-               "    .lifecycle(rex::cvar::Lifecycle::kInitOnly);\n"),
-              ("carbon-prec-loop",
-               "    return false;\n  }\n  const auto& shaders = d.biblioteca.shaders();\n",
-               "    return false;\n  }\n"
-               "  // carbon-prec-loop: the pixel shaders' color math at 16 bits (see nfsmw_spirv_precision.h).\n"
-               "  if (REXCVAR_GET(nfsmw_nativo_media_precision)) {\n"
-               "    uint32_t shaders_tocados = 0;\n"
-               "    uint64_t resultados = 0;\n"
-               "    for (nfsmw::native::Shader& s : d.biblioteca.shaders_para_ajustar()) {\n"
-               "      if (!s.vertices) {\n"
-               "        const uint32_t marcados = RelajarPrecision(s.spirv);\n"
-               "        shaders_tocados += marcados ? 1 : 0;\n"
-               "        resultados += marcados;\n"
-               "      }\n"
-               "    }\n"
-               '    REXLOG_INFO("[nativo] C5a: media precision en {} pixel shaders ({} resultados a 16 bits)", shaders_tocados,\n'
-               "                resultados);\n"
-               "  }\n"
-               "  const auto& shaders = d.biblioteca.shaders();\n"),
-          ])
-          patch(cmake, [
-              ("carbon-prec-cmake",
-               "    ${NFSC_NFSMW_SRC}/nfsmw_shader_library.cpp\n",
-               "    ${NFSC_NFSMW_SRC}/nfsmw_shader_library.cpp\n    ${NFSC_NFSMW_SRC}/nfsmw_spirv_precision.cpp\n"),
-          ])
+          once('#include "nfsmw_nativo_sistema.h"\n',
+               '#include <cmath>\n#include "nfsmw_nativo_sistema.h"\n', "include")
+
+          once('namespace {\nconstexpr uint32_t kRenderer = 0x82C65304;',
+               '''// carbon-widescreen: the game draws at the screen's proportion (scene mode width = height * carbon_aspect) and the
+          // camera sees more at the sides (Hor+) instead of cropping top and bottom. HUD, menus and videos are stretched.
+          REXCVAR_DEFINE_DOUBLE(carbon_aspect, 0.0, "Carbon/Android",
+                                "Screen width / height (2.2222 on a 20:9 phone) to draw the game at that proportion, wider "
+                                "view at the sides. 0 or below 1.9 = 16:9 like the Xbox 360. Up to 2.4. Needs carbon_single_pass")
+              .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+          REXCVAR_DEFINE_BOOL(carbon_aspect_camera, true, "Carbon/Android",
+                              "With carbon_aspect: widen the camera (Hor+). Off = same camera, only the picture is stretched")
+              .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+          namespace {
+          constexpr uint32_t kRenderer = 0x82C65304;''', "namespace")
+
+          once('std::pair<uint32_t, uint32_t> Size() {',
+               'std::pair<uint32_t, uint32_t> BaseSize() {', "Size def")
+
+          once('void OutputSize(uint8_t* base) {',
+               '''std::pair<uint32_t, uint32_t> Size() {
+            auto [width, height] = BaseSize();
+            const double aspect = REXCVAR_GET(carbon_aspect);
+            if (aspect >= 1.9 && REXCVAR_GET(carbon_single_pass))
+              width = uint32_t(std::lround(double(height) * std::min(aspect, 2.4) / 32.0)) * 32u;
+            return {width, height};
+          }
+          // How much wider than the 16:9 of the same height the scene is (1.25 for 1600x720); 1 = off.
+          double WideFactor() {
+            auto [width, height] = Size();
+            const double k = double(width) / (double(height) * 16.0 / 9.0);
+            return k > 1.02 ? k : 1.0;
+          }
+          void OutputSize(uint8_t* base) {''', "OutputSize")
+
+          s += r'''
+          // carbon-widescreen: Hor+ camera. sub_822CEC80(r3 = view block, r4 = eView, f1 = ...) writes the projection at
+          // block+64 and a copy at block+128 ([0][0] = 1 / tan(horizontal) at +0, [1][1] = -1 / tan(vertical) at +20), then calls
+          // sub_822CEA90 (its only caller), which returns H (LOD / culling) for eView+16, and then multiplies the view by the
+          // projection. The vertical angle is proportional to height / width of the view's render target (table 0x82C721D0,
+          // 480 bytes per view id [eView+8], target object at +464 with width at +16 and height at +20; 640x480 if none).
+          // For the views drawn at the wide size: [0][0] / k (wider), the vertical angle * k (back to the 16:9 one), H / k.
+          namespace {
+          thread_local uint32_t t_block = 0;
+          thread_local uint32_t t_view = 0;
+
+          uint32_t WRead32(const uint8_t* base, uint32_t address) {
+            uint32_t v;
+            std::memcpy(&v, base + address, sizeof(v));
+            return __builtin_bswap32(v);
+          }
+          float WReadFloat(const uint8_t* base, uint32_t address) {
+            const uint32_t v = WRead32(base, address);
+            float f;
+            std::memcpy(&f, &v, sizeof(f));
+            return f;
+          }
+          void WWriteFloat(uint8_t* base, uint32_t address, float f) {
+            uint32_t v;
+            std::memcpy(&v, &f, sizeof(v));
+            v = __builtin_bswap32(v);
+            std::memcpy(base + address, &v, sizeof(v));
+          }
+          bool CameraCodeIsCarbon(const uint8_t* base) {
+            static int state = 0;  // 0 not checked, 1 ok, 2 different
+            if (!state) {
+              state = (WRead32(base, 0x822CEC80) == 0x7D8802A6 && WRead32(base, 0x822CEC84) == 0x484CC2A5) ? 1 : 2;
+              if (state == 2) REXLOG_WARN("[carbon] widescreen camera: sub_822CEC80 is not the expected code, camera not changed");
+            }
+            return state == 1;
+          }
+          // k for this view (1 = leave it), from the size of the view's target.
+          double WideViewFactor(const uint8_t* base, uint32_t view) {
+            const double k = WideFactor();
+            if (k <= 1.0) return 1.0;
+            const uint32_t id = WRead32(base, view + 8);
+            if (id > 255) return 1.0;
+            const uint32_t target = WRead32(base, 0x82C721D0 + 480 * id + 464);
+            const uint32_t width = target ? WRead32(base, target + 16) : 640;
+            const uint32_t height = target ? WRead32(base, target + 20) : 480;
+            auto [wide_width, wide_height] = Size();
+            const double wanted = double(wide_width) / double(wide_height);
+            static uint64_t seen = 0;
+            if (id < 64 && !(seen & (uint64_t(1) << id))) {
+              seen |= uint64_t(1) << id;
+              REXLOG_INFO("[carbon] widescreen: view {} target {}x{} (wide scene {}x{}, k {:.4f})", id, width, height,
+                          wide_width, wide_height, k);
+            }
+            if (height == 0 || std::fabs(double(width) / double(height) - wanted) > wanted * 0.05) return 1.0;
+            if (width != wide_width && width * 2 != wide_width && width * 4 != wide_width) return 1.0;
+            return k;
+          }
+          void WideProjection(uint8_t* base, uint32_t projection, double k) {
+            const float sx = WReadFloat(base, projection + 0);
+            const float sy = WReadFloat(base, projection + 20);
+            if (!(sx > 0.0f) || sy == 0.0f || !std::isfinite(sx) || !std::isfinite(sy)) return;
+            const double vertical = std::min(std::atan(1.0 / std::fabs(double(sy))) * k, 1.55);  // under 89 degrees
+            WWriteFloat(base, projection + 0, float(double(sx) / k));
+            WWriteFloat(base, projection + 20, float(std::copysign(1.0 / std::tan(vertical), double(sy))));
+          }
+          }  // namespace
+
+          REX_EXTERN(__imp__sub_822CEC80);
+          REX_HOOK_RAW(sub_822CEC80) {
+            t_block = ctx.r3.u32;
+            t_view = ctx.r4.u32;
+            __imp__sub_822CEC80(ctx, base);
+            t_block = 0;
+            t_view = 0;
+          }
+
+          REX_EXTERN(__imp__sub_822CEA90);
+          REX_HOOK_RAW(sub_822CEA90) {
+            __imp__sub_822CEA90(ctx, base);
+            if (t_block && t_view && verified && REXCVAR_GET(carbon_aspect_camera) && CameraCodeIsCarbon(base)) {
+              const double k = WideViewFactor(base, t_view);
+              if (k > 1.0) {
+                WideProjection(base, t_block + 64, k);
+                WideProjection(base, t_block + 128, k);
+                ctx.f1.f64 /= k;  // H as at 16:9: the same LOD and culling distances
+                static int logged = 0;
+                if (logged++ < 4) REXLOG_INFO("[carbon] widescreen camera: view block {:08X} corrected, k {:.4f}", t_block, k);
+              }
+            }
+          }
+          '''
+          open(p, "w", encoding="utf-8").write(s)
+          print("patched")
           PY
 
       - name: Link game copy next to the repo
@@ -412,118 +485,6 @@ jobs:
 
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
-
-      - name: Patch - c173 (cvBlurParams) diagnostics and override in the native renderer
-        shell: bash
-        run: |
-          set -euo pipefail
-          NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android"
-          python3 - "$NFS/app/src" <<'PY'
-          import sys
-
-          root = sys.argv[1]  # nfsmw-android/app/src
-
-
-          def patch(path, edits):
-              s = open(path, encoding="utf-8").read()
-              for marker, old, new in edits:
-                  if marker in s:
-                      print("ya aplicado:", marker)
-                      continue
-                  n = s.count(old)
-                  if n != 1:
-                      sys.exit("ANCLA NO ENCONTRADA (%d veces) para %s: %r" % (n, marker, old[:60]))
-                  s = s.replace(old, new, 1)
-                  print("aplicado:", marker)
-              open(path, "w", encoding="utf-8").write(s)
-
-
-          D = root + "/nfsmw_nativo_dibujos.cpp"
-          patch(D, [
-              ("carbon-c173-inc", "#include <cmath>\n", "#include <cmath>\n#include <cstdlib>  // carbon-c173-inc\n"),
-              ("carbon-c173-cvar",
-               '"se graban (solo pruebas, para localizar un dibujo)");\n',
-               '"se graban (solo pruebas, para localizar un dibujo)");\n'
-               '// carbon-c173-cvar: override of c173 (cvBlurParams) of one pixel shader, for tests.\n'
-               'REXCVAR_DEFINE_INT32(carbon_c173_ps, -1, "Carbon",\n'
-               '                     "Number of the pixel shader whose constant c173 (cvBlurParams) is overridden (-1 = off)");\n'
-               'REXCVAR_DEFINE_STRING(carbon_c173_valor, "0,x,x,x", "Carbon",\n'
-               '                      "x,y,z,w written to c173 of that pixel shader; x = keep the game value");\n'),
-              ("carbon-c173-members",
-               "  std::string diag_omitir_ps_texto_;\n",
-               "  std::string diag_omitir_ps_texto_;\n"
-               "  int32_t carbon_c173_ps_ = -1;  // carbon-c173-members\n"
-               "  float carbon_c173_v_[4] = {NAN, NAN, NAN, NAN};\n"
-               "  std::string carbon_c173_texto_;\n"),
-              ("carbon-c173-frame",
-               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n",
-               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n"
-               "    // carbon-c173-frame\n"
-               "    carbon_c173_ps_ = REXCVAR_GET(carbon_c173_ps);\n"
-               "    if (carbon_c173_ps_ >= 0) {\n"
-               "      const std::string v = REXCVAR_GET(carbon_c173_valor);\n"
-               "      if (v != carbon_c173_texto_) {\n"
-               "        carbon_c173_texto_ = v;\n"
-               "        size_t ini = 0;\n"
-               "        for (int k = 0; k < 4; ++k) {\n"
-               "          const size_t fin = std::min(v.find(',', ini), v.size());\n"
-               "          const std::string t = v.substr(ini, fin - ini);\n"
-               "          carbon_c173_v_[k] = (t.empty() || t[0] == 'x') ? NAN : std::strtof(t.c_str(), nullptr);\n"
-               "          ini = std::min(fin + 1, v.size());\n"
-               "        }\n"
-               "        REXLOG_WARN(\"[carbon] c173 del PS {} = ({}, {}, {}, {}) (nan = el del juego)\", carbon_c173_ps_,\n"
-               "                    carbon_c173_v_[0], carbon_c173_v_[1], carbon_c173_v_[2], carbon_c173_v_[3]);\n"
-               "      }\n"
-               "    }\n"),
-              ("carbon-c173-func",
-               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n",
-               "  // carbon-c173-func: uploads its own copy of the constants of the chosen pixel shader with c173 (cvBlurParams)\n"
-               "  // changed, and leaves the cache empty so the next draw uploads the game's (like CopiaComposicionTratada).\n"
-               "  [[gnu::noinline]] void CopiaC173(const EntradaShader* ps, const uint32_t* r, uint32_t bytes_ps) noexcept {\n"
-               "    if (carbon_c173_ps_ < 0 || !ps || ps->numero != uint32_t(carbon_c173_ps_) || bytes_ps < 174 * 16) {\n"
-               "      return;\n"
-               "    }\n"
-               "    VkDeviceSize offset = 0;\n"
-               "    if (!Reservar(usar_ubo_ ? std::max<VkDeviceSize>(bytes_ps, kUboBytesPs) : bytes_ps,\n"
-               "                  usar_ubo_ ? alineacion_ubo_ : 16, offset)) {\n"
-               "      return;\n"
-               "    }\n"
-               "    std::memcpy(subida_datos_ + offset, r + kRegConstantesPs, bytes_ps);\n"
-               "    float* c = reinterpret_cast<float*>(subida_datos_ + offset) + 173 * 4;\n"
-               "    for (int k = 0; k < 4; ++k) {\n"
-               "      if (!std::isnan(carbon_c173_v_[k])) {\n"
-               "        c[k] = carbon_c173_v_[k];\n"
-               "      }\n"
-               "    }\n"
-               "    constantes_ps_offset_ = offset;\n"
-               "    constantes_ps_generacion_ = UINT64_MAX;\n"
-               "  }\n\n"
-               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n"),
-              ("carbon-c173-call",
-               "    if (!ps || !ps->shader || ps->shader->huella != kHuellaComposicion) {\n      return;\n    }\n"
-               "    const int modo = nfsmw::ajustes::TratamientoVisual();\n",
-               "    CopiaC173(ps, r, bytes_ps);  // carbon-c173-call\n"
-               "    if (!ps || !ps->shader || ps->shader->huella != kHuellaComposicion) {\n      return;\n    }\n"
-               "    const int modo = nfsmw::ajustes::TratamientoVisual();\n"),
-          ])
-
-          S = root + "/nfsmw_nativo_sistema.cpp"
-          patch(S, [
-              ("carbon-c173-diag",
-               '    REXLOG_INFO("[nativo] constantes PS n{} (Swap {}):{}", ps_dibujo_->numero, swaps_.load(), valores);\n',
-               '    for (uint32_t k : {173u, 255u}) {  // carbon-c173-diag: cvBlurParams and c255\n'
-               '      valores += fmt::format(" c{}=(", k);\n'
-               '      for (uint32_t c = 0; c < 4; ++c) {\n'
-               '        float f;\n'
-               '        const uint32_t bits = registros_[0x4400 + k * 4 + c];\n'
-               '        std::memcpy(&f, &bits, sizeof(f));\n'
-               '        valores += fmt::format("{}{:.4g}", c ? "," : "", f);\n'
-               '      }\n'
-               '      valores += ")";\n'
-               '    }\n'
-               '    REXLOG_INFO("[nativo] constantes PS n{} (Swap {}):{}", ps_dibujo_->numero, swaps_.load(), valores);\n'),
-          ])
-          PY
 
       - name: Validation layer (test builds only)
         env:
