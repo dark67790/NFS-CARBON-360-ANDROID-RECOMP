@@ -301,7 +301,7 @@ jobs:
           // camera sees more at the sides (Hor+) instead of cropping top and bottom. HUD, menus and videos are stretched.
           REXCVAR_DEFINE_DOUBLE(carbon_aspect, 0.0, "Carbon/Android",
                                 "Screen width / height (2.2222 on a 20:9 phone) to draw the game at that proportion, wider "
-                                "view at the sides. 0 or below 1.9 = 16:9 like the Xbox 360. Up to 2.4. Needs carbon_single_pass")
+                                "view at the sides. 0 or below 1.9 = 16:9 like the Xbox 360. Up to 2.6. Needs carbon_single_pass")
               .lifecycle(rex::cvar::Lifecycle::kInitOnly);
           REXCVAR_DEFINE_BOOL(carbon_aspect_camera, true, "Carbon/Android",
                               "With carbon_aspect: widen the camera (Hor+). Off = same camera, only the picture is stretched")
@@ -318,7 +318,7 @@ jobs:
             auto [width, height] = BaseSize();
             const double aspect = REXCVAR_GET(carbon_aspect);
             if (aspect >= 1.9 && REXCVAR_GET(carbon_single_pass))
-              width = uint32_t(std::lround(double(height) * std::min(aspect, 2.4) / 32.0)) * 32u;
+              width = uint32_t(std::lround(double(height) * std::min(aspect, 2.6) / 32.0)) * 32u;
             return {width, height};
           }
           // How much wider than the 16:9 of the same height the scene is (1.25 for 1600x720); 1 = off.
