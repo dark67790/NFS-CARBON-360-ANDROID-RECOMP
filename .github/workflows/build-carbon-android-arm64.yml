@@ -424,6 +424,69 @@ jobs:
           print("patched")
           PY
 
+      - name: Patch - remove the speed motion blur (hook sub_82506D20)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_WORKSPACE/android/app/src/main/cpp/carbon_graphics.cpp" <<'PY'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          if "carbon-no-motion-blur" in s:
+              print("already patched")
+              sys.exit(0)
+          if "sub_82506D20" in s:
+              sys.exit("sub_82506D20 is already hooked in this file")
+          if "REXCVAR_DEFINE_BOOL(carbon_single_pass" not in s:
+              sys.exit("ANCHOR NOT FOUND: carbon_single_pass (wrong file?)")
+          s += r'''
+          // carbon-no-motion-blur: the VisualTreatment pass (sub_82507370: DownScale2x2ForMotionBlur -> motionblur x3 ->
+          // composite_blur) starts with `bl sub_82506D20` and, if the low byte of the result is 0, jumps straight to its epilogue
+          // (0x82507850) and draws nothing: the scene stays as it was. sub_82506D20(r3 = state, r4 = view, r5 = out rect) keeps the
+          // blur amount at [r3 + 180] and answers 0 when it is at or below its threshold (the car is slow), so "no blur" is a path
+          // the game takes all the time. Here the answer is forced to 0 for that one call site, so none of the 5 passes run.
+          // This is what the PC widescreen fix does too (it turns the jnz that skips the blur pass into a jmp).
+          REXCVAR_DEFINE_BOOL(carbon_no_motion_blur, true, "Carbon/Android",
+                              "Skip the speed motion blur passes of the race (VisualTreatment). Saves their GPU time too")
+              .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+          REXCVAR_DEFINE_BOOL(carbon_diag_motion_blur, false, "Carbon/Android",
+                              "Log what the game decided about the motion blur (first calls and about once per second)")
+              .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+          namespace {
+          bool BlurCodeIsCarbon(const uint8_t* base) {
+            static int state = 0;  // 0 not checked, 1 ok, 2 different
+            if (!state) {
+              auto word = [&](uint32_t a) { uint32_t v; std::memcpy(&v, base + a, 4); return __builtin_bswap32(v); };
+              state = (word(0x82506D20) == 0x7D8802A6 && word(0x82506D24) == 0x48294205 && word(0x82507370) == 0x7D8802A6 &&
+                       word(0x82507374) == 0x48293B95) ? 1 : 2;
+              if (state == 2) REXLOG_WARN("[carbon] motion blur: sub_82506D20 / sub_82507370 are not the expected code, left alone");
+            }
+            return state == 1;
+          }
+          }  // namespace
+
+          REX_EXTERN(__imp__sub_82506D20);
+          REX_HOOK_RAW(sub_82506D20) {
+            const uint32_t caller = uint32_t(ctx.lr);
+            const uint32_t view = ctx.r4.u32;
+            __imp__sub_82506D20(ctx, base);
+            if (caller < 0x82507370 || caller >= 0x82507860) return;  // only the call inside the VisualTreatment pass
+            if (!verified || !BlurCodeIsCarbon(base)) return;
+            if (REXCVAR_GET(carbon_diag_motion_blur)) {
+              static uint32_t calls = 0;
+              if (calls < 6 || (calls % 60) == 0)
+                REXLOG_INFO("[carbon] motion blur: view {} game says {} -> {}", view, uint32_t(ctx.r3.u32 & 0xFF),
+                            REXCVAR_GET(carbon_no_motion_blur) ? 0u : uint32_t(ctx.r3.u32 & 0xFF));
+              ++calls;
+            }
+            if (REXCVAR_GET(carbon_no_motion_blur)) ctx.r3.u64 = 0;
+          }
+          '''
+          open(p, "w", encoding="utf-8").write(s)
+          print("patched")
+          PY
+
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
