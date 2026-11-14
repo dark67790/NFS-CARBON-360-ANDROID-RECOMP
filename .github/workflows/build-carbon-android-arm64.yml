@@ -274,7 +274,84 @@ jobs:
             touch "$stamp"
           fi
 
-      - name: Patch - widescreen (carbon_aspect) resolution and Hor+ camera
+      - name: Patch - half-precision pixel shaders (nfsmw_nativo_media_precision, from victorgbd)
+        shell: bash
+        run: |
+          set -euo pipefail
+          NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android/app/src"
+          VSHA=3ac2fb698576d8889ade19660c38d0fd25f2c5a5
+          BASE="https://raw.githubusercontent.com/victorgbd/NFSMW-Recompiled-Mobile/$VSHA/nativo/app/src"
+          if [ ! -f "$NFS/nfsmw_spirv_precision.cpp" ]; then
+            curl -fsSL --retry 3 -o "$NFS/nfsmw_spirv_precision.cpp" "$BASE/nfsmw_spirv_precision.cpp"
+            curl -fsSL --retry 3 -o "$NFS/nfsmw_spirv_precision.h" "$BASE/nfsmw_spirv_precision.h"
+          fi
+          echo "09c61e5fc9f16f38aa072cdbcc12e4e0851ab4f4fc7bca8c7c5cff1277179421  $NFS/nfsmw_spirv_precision.cpp" | sha256sum -c -
+          echo "6062dd2e4074b5c793b376f9b8b4aab0476d56485aae760db424006cabb78928  $NFS/nfsmw_spirv_precision.h" | sha256sum -c -
+          python3 - "$NFS" "$GITHUB_WORKSPACE/CMakeLists.txt" <<'PY'
+          import sys
+          nfs, cmake = sys.argv[1], sys.argv[2]
+
+          def patch(path, edits):
+              s = open(path, encoding="utf-8").read()
+              for marker, old, new in edits:
+                  if marker in s:
+                      print("ya aplicado:", marker)
+                      continue
+                  n = s.count(old)
+                  if n != 1:
+                      sys.exit("ANCLA NO ENCONTRADA (%d veces) para %s: %r" % (n, marker, old[:60]))
+                  s = s.replace(old, new, 1)
+                  print("aplicado:", marker)
+              open(path, "w", encoding="utf-8").write(s)
+
+          patch(nfs + "/nfsmw_shader_library.h", [
+              ("carbon-prec-accessor",
+               "  const std::vector<Shader>& shaders() const { return shaders_; }\n",
+               "  const std::vector<Shader>& shaders() const { return shaders_; }\n"
+               "  // carbon-prec-accessor: to adjust the SPIR-V right after Cargar (nfsmw_nativo_media_precision).\n"
+               "  std::vector<Shader>& shaders_para_ajustar() { return shaders_; }\n"),
+          ])
+          patch(nfs + "/nfsmw_nativo_shaders.cpp", [
+              ("carbon-prec-inc1", '#include "nfsmw_shader_library.h"\n',
+               '#include "nfsmw_shader_library.h"\n#include "nfsmw_spirv_precision.h"  // carbon-prec-inc1\n'),
+              ("carbon-prec-inc2", "#include <rex/logging.h>\n",
+               "#include <rex/cvar.h>  // carbon-prec-inc2\n#include <rex/logging.h>\n"),
+              ("carbon-prec-cvar", "#include <xxhash.h>\n",
+               "#include <xxhash.h>\n\n"
+               "// carbon-prec-cvar (from victorgbd/NFSMW-Recompiled-Mobile)\n"
+               'REXCVAR_DEFINE_BOOL(nfsmw_nativo_media_precision, false, "NFSMW",\n'
+               '                    "Native renderer (test): the color math of the pixel shaders at 16 bits "\n'
+               '                    "(RelaxedPrecision). Adreno and Mali do twice the arithmetic per cycle; texture "\n'
+               '                    "coordinates, depth and whatever does not come from a texture stay at 32 bits. "\n'
+               '                    "May show banding in some effect")\n'
+               "    .lifecycle(rex::cvar::Lifecycle::kInitOnly);\n"),
+              ("carbon-prec-loop",
+               "    return false;\n  }\n  const auto& shaders = d.biblioteca.shaders();\n",
+               "    return false;\n  }\n"
+               "  // carbon-prec-loop: the pixel shaders' color math at 16 bits (see nfsmw_spirv_precision.h).\n"
+               "  if (REXCVAR_GET(nfsmw_nativo_media_precision)) {\n"
+               "    uint32_t shaders_tocados = 0;\n"
+               "    uint64_t resultados = 0;\n"
+               "    for (nfsmw::native::Shader& s : d.biblioteca.shaders_para_ajustar()) {\n"
+               "      if (!s.vertices) {\n"
+               "        const uint32_t marcados = RelajarPrecision(s.spirv);\n"
+               "        shaders_tocados += marcados ? 1 : 0;\n"
+               "        resultados += marcados;\n"
+               "      }\n"
+               "    }\n"
+               '    REXLOG_INFO("[nativo] C5a: media precision en {} pixel shaders ({} resultados a 16 bits)", shaders_tocados,\n'
+               "                resultados);\n"
+               "  }\n"
+               "  const auto& shaders = d.biblioteca.shaders();\n"),
+          ])
+          patch(cmake, [
+              ("carbon-prec-cmake",
+               "    ${NFSC_NFSMW_SRC}/nfsmw_shader_library.cpp\n",
+               "    ${NFSC_NFSMW_SRC}/nfsmw_shader_library.cpp\n    ${NFSC_NFSMW_SRC}/nfsmw_spirv_precision.cpp\n"),
+          ])
+          PY
+
+      - name: Patch - widescreen v2 (carbon_widescreen auto-detect, carbon_aspect, Hor+ camera)
         shell: bash
         run: |
           set -euo pipefail
@@ -282,9 +359,11 @@ jobs:
           import sys
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
-          if "carbon-widescreen" in s:
+          if "carbon-ws2" in s:
               print("already patched")
               sys.exit(0)
+          if "carbon-widescreen" in s:
+              sys.exit("the OLD widescreen step already patched this file: remove it from the workflow and keep only this one")
 
           def once(old, new, what):
               global s
@@ -294,14 +373,18 @@ jobs:
               s = s.replace(old, new)
 
           once('#include "nfsmw_nativo_sistema.h"\n',
-               '#include <cmath>\n#include "nfsmw_nativo_sistema.h"\n', "include")
+               '#include <cmath>\n#include <SDL3/SDL_video.h>\n#include "nfsmw_nativo_sistema.h"\n', "include")
 
           once('namespace {\nconstexpr uint32_t kRenderer = 0x82C65304;',
-               '''// carbon-widescreen: the game draws at the screen's proportion (scene mode width = height * carbon_aspect) and the
+               '''// carbon-ws2: the game draws at the screen's proportion (scene mode width = height * carbon_aspect) and the
           // camera sees more at the sides (Hor+) instead of cropping top and bottom. HUD, menus and videos are stretched.
           REXCVAR_DEFINE_DOUBLE(carbon_aspect, 0.0, "Carbon/Android",
                                 "Screen width / height (2.2222 on a 20:9 phone) to draw the game at that proportion, wider "
                                 "view at the sides. 0 or below 1.9 = 16:9 like the Xbox 360. Up to 2.6. Needs carbon_single_pass")
+              .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+          REXCVAR_DEFINE_BOOL(carbon_widescreen, false, "Carbon/Android",
+                              "Draw the game at the screen's own proportion, read from the display (nothing happens on a 16:9 "
+                              "screen). carbon_aspect, if set, wins over this")
               .lifecycle(rex::cvar::Lifecycle::kInitOnly);
           REXCVAR_DEFINE_BOOL(carbon_aspect_camera, true, "Carbon/Android",
                               "With carbon_aspect: widen the camera (Hor+). Off = same camera, only the picture is stretched")
@@ -314,9 +397,29 @@ jobs:
                'std::pair<uint32_t, uint32_t> BaseSize() {', "Size def")
 
           once('void OutputSize(uint8_t* base) {',
-               '''std::pair<uint32_t, uint32_t> Size() {
+               '''// The proportion to draw at (0 = plain 16:9): carbon_aspect, or the display's with carbon_widescreen. Decided once, at
+          // the first call, so every size the game is given in a run agrees.
+          double WideAspect() {
+            static const double decided = []() -> double {
+              const double manual = REXCVAR_GET(carbon_aspect);
+              if (manual >= 1.9) return std::min(manual, 2.6);
+              if (!REXCVAR_GET(carbon_widescreen)) return 0.0;
+              const SDL_DisplayID display = SDL_GetPrimaryDisplay();
+              const SDL_DisplayMode* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
+              if (!mode || mode->w <= 0 || mode->h <= 0) {
+                REXLOG_WARN("[carbon] widescreen: cannot read the display size, staying at 16:9 (use carbon_aspect)");
+                return 0.0;
+              }
+              const double aspect = double(std::max(mode->w, mode->h)) / double(std::min(mode->w, mode->h));
+              REXLOG_INFO("[carbon] widescreen: display {}x{} -> proportion {:.4f}{}", mode->w, mode->h, aspect,
+                          aspect >= 1.9 ? "" : " (16:9 or narrower: the game as it is)");
+              return aspect >= 1.9 ? std::min(aspect, 2.6) : 0.0;
+            }();
+            return decided;
+          }
+          std::pair<uint32_t, uint32_t> Size() {
             auto [width, height] = BaseSize();
-            const double aspect = REXCVAR_GET(carbon_aspect);
+            const double aspect = WideAspect();
             if (aspect >= 1.9 && REXCVAR_GET(carbon_single_pass))
               width = uint32_t(std::lround(double(height) * std::min(aspect, 2.6) / 32.0)) * 32u;
             return {width, height};
@@ -330,7 +433,7 @@ jobs:
           void OutputSize(uint8_t* base) {''', "OutputSize")
 
           s += r'''
-          // carbon-widescreen: Hor+ camera. sub_822CEC80(r3 = view block, r4 = eView, f1 = ...) writes the projection at
+          // carbon-ws2: Hor+ camera. sub_822CEC80(r3 = view block, r4 = eView, f1 = ...) writes the projection at
           // block+64 and a copy at block+128 ([0][0] = 1 / tan(horizontal) at +0, [1][1] = -1 / tan(vertical) at +20), then calls
           // sub_822CEA90 (its only caller), which returns H (LOD / culling) for eView+16, and then multiplies the view by the
           // projection. The vertical angle is proportional to height / width of the view's render target (table 0x82C721D0,
@@ -423,6 +526,68 @@ jobs:
           open(p, "w", encoding="utf-8").write(s)
           print("patched")
           PY
+
+      - name: Link game copy next to the repo
+        run: |
+          # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
+          # Windows ignores case, Linux does not. run_pc.ps1/README use the capitalised name.
+          ln -sfn "$GAME_DIR" "$W/need_for_speed_carbon"
+          ln -sfn "$GAME_DIR" "$W/Need_for_Speed_Carbon"
+          test -f "$W/need_for_speed_carbon/default.xex"
+
+      - name: Patch CMakeLists for a Linux host (D3D12 is forced on non-Android)
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          p = pathlib.Path("CMakeLists.txt")
+          lines = p.read_text().splitlines()
+          if any("carbon-ci-host-patch" in l for l in lines):
+              print("already patched"); sys.exit(0)
+          i = next((k for k, l in enumerate(lines) if "REXGLUE_USE_D3D12 ON" in l), None)
+          if i is None:
+              sys.exit("pattern not found: REXGLUE_USE_D3D12 ON (CMakeLists changed upstream?)")
+          j = i - 1
+          while not lines[j].strip():
+              j -= 1
+          if lines[j].strip() != "else()":
+              sys.exit("expected else() before the D3D12 block, got: " + lines[j])
+          k = next((n for n in range(i, i + 6) if "REXGLUE_USE_VULKAN OFF" in lines[n]), None)
+          if k is None:
+              sys.exit("pattern not found: REXGLUE_USE_VULKAN OFF")
+          lines[j] = "elseif(WIN32) # carbon-ci-host-patch"
+          lines[k + 1:k + 1] = [
+              "else()",
+              '  set(REXGLUE_USE_D3D12 OFF CACHE BOOL "Linux host" FORCE)',
+              '  set(REXGLUE_USE_VULKAN ON CACHE BOOL "Linux host" FORCE)',
+          ]
+          p.write_text("\n".join(lines) + "\n")
+          print("patched CMakeLists.txt")
+          PY
+
+      - name: Code generation from default.xex (native arm64 host tools)
+        if: "!inputs.skip_codegen"
+        run: |
+          # build_pc.ps1 used clang.exe + -march=x86-64-v2 + VS dev shell. Native arm64 clang-20 here.
+          cmake -S . -B out/pc -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DREXSDK_DIR="$SDK_DIR"
+          cmake --build out/pc --target nfscarbon_codegen --parallel "$JOBS"
+          python tools/fix_local_branches.py
+          test -f generated/default/nfscarbon_pch.h
+
+      - name: Small-entry recovery from local memory dump
+        run: |
+          if [ -f "$DUMP_FILE" ]; then
+            mkdir -p out/runtime/cache
+            cp "$DUMP_FILE" out/runtime/cache/carbon-82000000.bin
+            python tools/recover_small_entries.py
+            python tools/verify_small_entries.py
+          else
+            echo "::warning::Skipping recovery (no dump). The APK may crash where recovered entries are needed."
+          fi
+
+      - name: Verify registration maps
+        run: python tools/verify_registration_maps.py
 
       - name: Patch - blur strength (c173 / cvBlurParams) scale, limit and override in the native renderer
         shell: bash
@@ -551,67 +716,138 @@ jobs:
           ])
           PY
 
-      - name: Link game copy next to the repo
+      - name: Patch - 2D squeeze (HUD, menus, videos) and draw diagnostics in the native renderer
+        shell: bash
         run: |
-          # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
-          # Windows ignores case, Linux does not. run_pc.ps1/README use the capitalised name.
-          ln -sfn "$GAME_DIR" "$W/need_for_speed_carbon"
-          ln -sfn "$GAME_DIR" "$W/Need_for_Speed_Carbon"
-          test -f "$W/need_for_speed_carbon/default.xex"
+          set -euo pipefail
+          NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android"
+          python3 - "$NFS/app/src" <<'PY'
+          import sys
 
-      - name: Patch CMakeLists for a Linux host (D3D12 is forced on non-Android)
-        run: |
-          python - <<'PY'
-          import pathlib, sys
-          p = pathlib.Path("CMakeLists.txt")
-          lines = p.read_text().splitlines()
-          if any("carbon-ci-host-patch" in l for l in lines):
-              print("already patched"); sys.exit(0)
-          i = next((k for k, l in enumerate(lines) if "REXGLUE_USE_D3D12 ON" in l), None)
-          if i is None:
-              sys.exit("pattern not found: REXGLUE_USE_D3D12 ON (CMakeLists changed upstream?)")
-          j = i - 1
-          while not lines[j].strip():
-              j -= 1
-          if lines[j].strip() != "else()":
-              sys.exit("expected else() before the D3D12 block, got: " + lines[j])
-          k = next((n for n in range(i, i + 6) if "REXGLUE_USE_VULKAN OFF" in lines[n]), None)
-          if k is None:
-              sys.exit("pattern not found: REXGLUE_USE_VULKAN OFF")
-          lines[j] = "elseif(WIN32) # carbon-ci-host-patch"
-          lines[k + 1:k + 1] = [
-              "else()",
-              '  set(REXGLUE_USE_D3D12 OFF CACHE BOOL "Linux host" FORCE)',
-              '  set(REXGLUE_USE_VULKAN ON CACHE BOOL "Linux host" FORCE)',
-          ]
-          p.write_text("\n".join(lines) + "\n")
-          print("patched CMakeLists.txt")
+          root = sys.argv[1]  # nfsmw-android/app/src
+
+
+          def patch(path, edits):
+              s = open(path, encoding="utf-8").read()
+              for marker, old, new in edits:
+                  if marker in s:
+                      print("already applied:", marker)
+                      continue
+                  n = s.count(old)
+                  if n != 1:
+                      sys.exit("ANCHOR NOT FOUND (%d times) for %s: %r" % (n, marker, old[:60]))
+                  s = s.replace(old, new, 1)
+                  print("applied:", marker)
+              open(path, "w", encoding="utf-8").write(s)
+
+
+          D = root + "/nfsmw_nativo_dibujos.cpp"
+          patch(D, [
+              ("carbon-2d-inc", "#include <cmath>\n", "#include <cmath>\n#include <cstdlib>  // carbon-2d-inc\n#include <map>\n"),
+              ("carbon-2d-cvar",
+               '"se graban (solo pruebas, para localizar un dibujo)");\n',
+               '"se graban (solo pruebas, para localizar un dibujo)");\n'
+               '// carbon-2d-cvar: 2D draws (HUD, menus, videos) squeezed to the 16:9 of the pass height, centred, on a wider pass.\n'
+               'REXCVAR_DEFINE_BOOL(carbon_2d_diag, false, "Carbon",\n'
+               '                    "Every 8 s, list the kinds of draw seen (VS, PS, pixel mode, viewport, pass) with their counts");\n'
+               'REXCVAR_DEFINE_STRING(carbon_2d_vs, "", "Carbon",\n'
+               '                      "Numbers of the vertex shaders whose draws are squeezed to the centre 16:9 on a wider pass, e.g. 12,13");\n'
+               'REXCVAR_DEFINE_BOOL(carbon_2d_sinrecorte, false, "Carbon",\n'
+               '                    "Squeeze every draw made with the clipping disabled (screen-pixel draws: videos, perhaps the HUD)");\n'),
+              ("carbon-2d-members",
+               "  std::string diag_omitir_ps_texto_;\n",
+               "  std::string diag_omitir_ps_texto_;\n"
+               "  bool carbon_2d_activo_ = false;  // carbon-2d-members\n"
+               "  bool carbon_2d_diag_ = false;\n"
+               "  bool carbon_2d_sinrecorte_ = false;\n"
+               "  std::string carbon_2d_vs_texto_;\n"
+               "  std::vector<uint32_t> carbon_2d_vs_;\n"
+               "  std::map<std::string, uint64_t> carbon_2d_visto_;\n"
+               "  std::chrono::steady_clock::time_point carbon_2d_informe_{};\n"),
+              ("carbon-2d-frame",
+               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n",
+               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n"
+               "    // carbon-2d-frame\n"
+               "    carbon_2d_diag_ = REXCVAR_GET(carbon_2d_diag);\n"
+               "    carbon_2d_sinrecorte_ = REXCVAR_GET(carbon_2d_sinrecorte);\n"
+               "    {\n"
+               "      const std::string v = REXCVAR_GET(carbon_2d_vs);\n"
+               "      if (v != carbon_2d_vs_texto_) {\n"
+               "        carbon_2d_vs_texto_ = v;\n"
+               "        carbon_2d_vs_.clear();\n"
+               "        size_t ini = 0;\n"
+               "        while (ini < v.size()) {\n"
+               "          const size_t fin = std::min(v.find(',', ini), v.size());\n"
+               "          const std::string t = v.substr(ini, fin - ini);\n"
+               "          if (!t.empty()) {\n"
+               "            carbon_2d_vs_.push_back(uint32_t(std::strtoul(t.c_str(), nullptr, 10));\n"
+               "          }\n"
+               "          ini = fin + 1;\n"
+               "        }\n"
+               "        REXLOG_WARN(\"[carbon] 2D: {} vertex shaders in the list ('{}')\", carbon_2d_vs_.size(), v);\n"
+               "      }\n"
+               "      carbon_2d_activo_ = carbon_2d_diag_ || carbon_2d_sinrecorte_ || !carbon_2d_vs_.empty();\n"
+               "    }\n"),
+              ("carbon-2d-func",
+               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n",
+               "  // carbon-2d-func: the kinds of draw seen, listed every 8 s.\n"
+               "  void Registrar2D(uint32_t vs, int ps, bool sin_recorte, const VkViewport& viewport, bool elegido) {\n"
+               "    carbon_2d_visto_[fmt::format(\"VS n{} PS n{} {} viewport {:.0f}x{:.0f} pass {}x{}{}\", vs, ps,\n"
+               "                                  sin_recorte ? \"pixel-mode\" : \"clipped\", viewport.width,\n"
+               "                                  std::abs(viewport.height), pase_ancho_, pase_alto_,\n"
+               "                                  elegido ? \" [SQUEEZED]\" : \"\")]++;\n"
+               "    const auto ahora = std::chrono::steady_clock::now();\n"
+               "    if (ahora - carbon_2d_informe_ < std::chrono::seconds(8)) {\n"
+               "      return;\n"
+               "    }\n"
+               "    carbon_2d_informe_ = ahora;\n"
+               "    std::vector<std::pair<uint64_t, std::string>> orden;\n"
+               "    for (const auto& kv : carbon_2d_visto_) {\n"
+               "      orden.emplace_back(kv.second, kv.first);\n"
+               "    }\n"
+               "    std::sort(orden.begin(), orden.end(), [](const auto& a, const auto& b) { return a.first > b.first; });\n"
+               "    REXLOG_WARN(\"[carbon] 2D draws, last 8 s ({} kinds):\", orden.size());\n"
+               "    for (size_t i = 0; i < orden.size() && i < 40; ++i) {\n"
+               "      REXLOG_WARN(\"[carbon] 2D  {:6} x  {}\", orden[i].first, orden[i].second);\n"
+               "    }\n"
+               "    carbon_2d_visto_.clear();\n"
+               "  }\n\n"
+               "  // Squeezes the output of a draw to the centre 16:9 of a pass wider than 16:9 (k = how much wider).\n"
+               "  void Comprimir2D(bool sin_recorte, VkViewport& viewport, float ndc[4]) {\n"
+               "    if (pase_alto_ == 0) {\n"
+               "      return;\n"
+               "    }\n"
+               "    const float k = float(pase_ancho_) / (float(pase_alto_) * (16.0f / 9.0f));\n"
+               "    if (!(k > 1.02f)) {\n"
+               "      return;\n"
+               "    }\n"
+               "    if (sin_recorte) {  // x_out = x * ndc[0] + ndc[2]: scale the output about the centre\n"
+               "      ndc[0] /= k;\n"
+               "      ndc[2] /= k;\n"
+               "    } else {  // clip space through the viewport: the viewport shrinks about the centre of the pass\n"
+               "      const float centro = float(pase_ancho_) * 0.5f;\n"
+               "      viewport.x = centro + (viewport.x - centro) / k;\n"
+               "      viewport.width /= k;\n"
+               "    }\n"
+               "  }\n\n"
+               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n"),
+              ("carbon-2d-draw",
+               "    if (encuadre_vacio != 0) {\n      return true;  // empty viewport or scissor: as before\n    }\n",
+               "    if (encuadre_vacio != 0) {\n      return true;  // empty viewport or scissor: as before\n    }\n"
+               "    if (carbon_2d_activo_) {  // carbon-2d-draw\n"
+               "      bool elegido = sin_recorte && carbon_2d_sinrecorte_;\n"
+               "      for (uint32_t n : carbon_2d_vs_) {\n"
+               "        elegido = elegido || n == uint32_t(p.vs->numero);\n"
+               "      }\n"
+               "      if (carbon_2d_diag_) {\n"
+               "        Registrar2D(uint32_t(p.vs->numero), ps ? int(ps->numero) : -1, sin_recorte, viewport, elegido);\n"
+               "      }\n"
+               "      if (elegido) {\n"
+               "        Comprimir2D(sin_recorte, viewport, ndc);\n"
+               "      }\n"
+               "    }\n"),
+          ])
           PY
-
-      - name: Code generation from default.xex (native arm64 host tools)
-        if: "!inputs.skip_codegen"
-        run: |
-          # build_pc.ps1 used clang.exe + -march=x86-64-v2 + VS dev shell. Native arm64 clang-20 here.
-          cmake -S . -B out/pc -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
-            -DREXSDK_DIR="$SDK_DIR"
-          cmake --build out/pc --target nfscarbon_codegen --parallel "$JOBS"
-          python tools/fix_local_branches.py
-          test -f generated/default/nfscarbon_pch.h
-
-      - name: Small-entry recovery from local memory dump
-        run: |
-          if [ -f "$DUMP_FILE" ]; then
-            mkdir -p out/runtime/cache
-            cp "$DUMP_FILE" out/runtime/cache/carbon-82000000.bin
-            python tools/recover_small_entries.py
-            python tools/verify_small_entries.py
-          else
-            echo "::warning::Skipping recovery (no dump). The APK may crash where recovered entries are needed."
-          fi
-
-      - name: Verify registration maps
-        run: python tools/verify_registration_maps.py
 
       - name: Validation layer (test builds only)
         env:
