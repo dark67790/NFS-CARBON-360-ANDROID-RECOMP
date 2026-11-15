@@ -785,16 +785,26 @@ jobs:
               s = once(s, "Leer32(base, vista + 4) != kVistaEscena", "Leer32(base, vista + 8) != kVistaEscena", "id2")
               s = once(s, "c.vp[i] = double(LeerFloat(base, bloque + 128 + i * 4));",
                        "c.vp[i] = double(LeerFloat(base, bloque + 192 + i * 4));  // Carbon: view x projection at block+192", "vp")
+              wr(g, s)
+              print("gsr2 sources copied and carbonised")
+
+
+          # carbon-gsr2 (2nd round): the 2D-only frame flag. Separate from the copy above because those files stay on the
+          # runner (untracked) and an earlier run may have carbonised them already.
+          g = APP + "/nfsmw_gsr2.cpp"
+          h = APP + "/nfsmw_gsr2.h"
+          s = rd(g)
+          if "e.solo_2d" not in s:
               s = once(s, "    reset = reset || !camara.valida || !anterior_.valida;\n",
                        "    reset = reset || !camara.valida || !anterior_.valida || e.solo_2d;  // carbon-gsr2: a frame of 2D only has nothing to accumulate\n", "solo2d use")
               wr(g, s)
-              h = APP + "/nfsmw_gsr2.h"
-              sh = rd(h)
+          sh = rd(h)
+          if "solo_2d" not in sh:
               sh = once(sh, "  bool escena_rb = false;  // red and blue swapped relative to color\n",
                         "  bool escena_rb = false;  // red and blue swapped relative to color\n"
                         "  bool solo_2d = false;    // carbon-gsr2: no 3D draw this frame (menus): no history, just the upscale\n", "solo2d field")
               wr(h, sh)
-              print("gsr2 sources copied and carbonised")
+              print("gsr2 2D-only flag added")
 
           # ---------------------------------------------------------------- 2. SDK
           p = SDK + "/src/kernel/xboxkrnl/xboxkrnl_video.cpp"
