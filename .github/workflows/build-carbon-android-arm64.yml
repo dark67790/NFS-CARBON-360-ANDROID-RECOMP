@@ -1019,27 +1019,40 @@ jobs:
               // The composited scene before the HUD: the last earlier resolve of the same render target, the same size,
               // to another texture.
               bool con_escena = false;
-              for (size_t i = f; i-- > 0;) {
-                const ResolucionFotograma& r = resoluciones_fotograma_[i];
-                if (r.origen != frontal.origen || r.destino == base || r.ancho != frontal.ancho || r.alto != frontal.alto) {
-                  continue;
+              bool escena_laxa = false;
+              for (int pasada = 0; pasada < 2 && !con_escena; ++pasada) {
+                // pasada 0: as Most Wanted (the same render target); pasada 1 (Carbon): any earlier resolve of the same size
+                for (size_t i = f; i-- > 0;) {
+                  const ResolucionFotograma& r = resoluciones_fotograma_[i];
+                  if ((pasada == 0 && r.origen != frontal.origen) || r.destino == base || r.ancho != frontal.ancho ||
+                      r.alto != frontal.alto) {
+                    continue;
+                  }
+                  const auto it = resueltas_.find(r.destino);
+                  if (it != resueltas_.end() && it->second.imagen.preparada && it->second.imagen.ancho == frontal.ancho &&
+                      it->second.imagen.alto == frontal.alto) {
+                    e.escena = it->second.imagen.vista;
+                    e.escena_rb = it->second.intercambio_rb != (desde_destino ? false : frontal.intercambio_rb);
+                    con_escena = true;
+                    escena_laxa = pasada == 1;
+                  }
+                  break;
                 }
-                const auto it = resueltas_.find(r.destino);
-                if (it != resueltas_.end() && it->second.imagen.preparada && it->second.imagen.ancho == frontal.ancho &&
-                    it->second.imagen.alto == frontal.alto) {
-                  e.escena = it->second.imagen.vista;
-                  e.escena_rb = it->second.intercambio_rb != (desde_destino ? false : frontal.intercambio_rb);
-                  con_escena = true;
-                }
-                break;
               }
               if (avisos_gsr2_ < 3) {  // what was found, for the first frames (to tune it on the device)
                 ++avisos_gsr2_;
+                std::string lista;
+                for (size_t i = 0; i < resoluciones_fotograma_.size() && i < 16; ++i) {
+                  const ResolucionFotograma& r = resoluciones_fotograma_[i];
+                  lista += fmt::format(" [{:08X} RT {:X} {}x{}{}]", r.destino, r.origen, r.ancho, r.alto, i == f ? " FRONTAL" : "");
+                }
+                REXLOG_INFO("[gsr2] resueltos del fotograma:{}", lista);
                 REXLOG_INFO("[gsr2] fotograma: buffer frontal {:08X} {}x{} (RT {:X}), profundidad {:08X} {}x{} pitch {}, rect "
                             "({},{})-({},{}), {} resueltos, escena previa al HUD: {}, salida {}x{}",
                             base, frontal.ancho, frontal.alto, frontal.origen, info_profundidad, profundidad.ancho,
                             profundidad.alto, frontal.pitch, frontal.x0, frontal.y0, frontal.x1, frontal.y1,
-                            resoluciones_fotograma_.size(), con_escena ? "si" : "no", plan.ancho_salida, plan.alto_salida);
+                            resoluciones_fotograma_.size(), con_escena ? (escena_laxa ? "si (cualquiera del mismo tamano)" : "si") : "no",
+                            plan.ancho_salida, plan.alto_salida);
               }
               plan.activo = true;
             }
