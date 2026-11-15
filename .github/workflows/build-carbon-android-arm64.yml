@@ -942,6 +942,7 @@ jobs:
                        "      nfsmw::gsr2::AnotarUso(con_gsr2 && llamada && ultimo_gsr2_hecho_);  // the game jitters only while it upscales\n"
                        "    }\n", "presenter refresh")
               # PrepararGsr2, before PintarSalida's comment
+              prep = open(os.path.dirname(os.path.abspath(__file__)) + "/prepararGsr2.inc").read() if False else None
               s = once(s, "  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n",
                        "@@PREPARAR@@  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n", "prep anchor")
               s = s.replace("@@PREPARAR@@", r'''  // carbon-gsr2: the frame's resolves -> what GSR 2 needs (plan.activo = false if something is missing).
@@ -1166,12 +1167,13 @@ jobs:
                        "    }\n"
                        "  } gsr2_jitter{base};\n", "cg cea90")
               s += r'''
-          // carbon-gsr2: one camera and one jitter phase per frame. sub_82453428 (only caller: sub_824E99C0, the render thread's
-          // entry) runs every view update of a frame (sub_82452788 / sub_82453048 -> sub_8250AD38 -> sub_8250AE40 -> sub_822CEC80).
-          REX_EXTERN(__imp__sub_82453428);
-          REX_HOOK_RAW(sub_82453428) {
+          # carbon-gsr2: one camera and one jitter phase per frame. sub_82453428 is the render thread's main loop (init, then a loop
+          # that calls sub_82453048 once per frame with the elapsed time, and nothing else calls it): that call is one frame.
+          # Inside it: sub_82452E70 -> sub_8250AD38 -> sub_8250AE40 -> sub_822CEC80 (the views' update).
+          REX_EXTERN(__imp__sub_82453048);
+          REX_HOOK_RAW(sub_82453048) {
             nfsmw::gsr2::EmpezarLlenado();
-            __imp__sub_82453428(ctx, base);
+            __imp__sub_82453048(ctx, base);
             nfsmw::gsr2::TerminarLlenado();
           }
           '''
