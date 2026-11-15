@@ -749,6 +749,19 @@ jobs:
               return s.replace(old, new)
 
 
+          # carbon-gsr2: the frame bracket (block comments only: nothing here starts a line with "//")
+          HOOK_BLOCK = r"""
+          /* carbon-gsr2: one camera and one jitter phase per frame. sub_82453428 is the render thread's main loop (init, then a
+             loop that calls sub_82453048 once per frame with the elapsed time; nothing else calls it): that call is one frame.
+             Inside it: sub_82452E70 -> sub_8250AD38 -> sub_8250AE40 -> sub_822CEC80 (the views' update). */
+          REX_EXTERN(__imp__sub_82453048);
+          REX_HOOK_RAW(sub_82453048) {
+            nfsmw::gsr2::EmpezarLlenado();
+            __imp__sub_82453048(ctx, base);
+            nfsmw::gsr2::TerminarLlenado();
+          }
+          """
+
           # ---------------------------------------------------------------- 1. files from victorgbd's repo
           for rel in ("app/src/nfsmw_gsr2.cpp", "app/src/nfsmw_gsr2.h",
                       "app/src/shaders/nfsmw_sgsr2_convertir_ps.h", "app/src/shaders/nfsmw_sgsr2_escalar_ps.h"):
@@ -940,7 +953,7 @@ jobs:
                        "        });\n"
                        "    if (gsr2_) {\n"
                        "      nfsmw::gsr2::AnotarUso(con_gsr2 && llamada && ultimo_gsr2_hecho_);  // the game jitters only while it upscales\n"
-                       "    }\n", "presenter refresh")
+                       "    }\n", "presentar refresh")
               # PrepararGsr2, before PintarSalida's comment
               prep = open(os.path.dirname(os.path.abspath(__file__)) + "/prepararGsr2.inc").read() if False else None
               s = once(s, "  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n",
@@ -1143,7 +1156,16 @@ jobs:
           p = C + "/android/app/src/main/cpp/carbon_graphics.cpp"
           s = rd(p)
           if "carbon-gsr2" in s:
-              print("carbon_graphics.cpp already patched")
+              # first version hooked sub_82453428 (the render thread's whole loop): move the bracket to sub_82453048.
+              # The old block is the last thing in the file; it starts at a comment line ("//", or "#" if an editor changed it).
+              import re
+              m = re.search(r"\n(?://|#) carbon-gsr2: one camera", s)
+              if m and s[m.start():] != HOOK_BLOCK:
+                  s = s[:m.start()] + HOOK_BLOCK
+                  wr(p, s)
+                  print("carbon_graphics.cpp: frame hook moved to sub_82453048")
+              else:
+                  print("carbon_graphics.cpp already patched")
           else:
               if "carbon-ws2" not in s:
                   sys.exit("carbon_graphics.cpp lacks the widescreen v2 patch (needed: this step hooks its camera functions)")
@@ -1166,17 +1188,7 @@ jobs:
                        "      }\n"
                        "    }\n"
                        "  } gsr2_jitter{base};\n", "cg cea90")
-              s += r'''
-          # carbon-gsr2: one camera and one jitter phase per frame. sub_82453428 is the render thread's main loop (init, then a loop
-          # that calls sub_82453048 once per frame with the elapsed time, and nothing else calls it): that call is one frame.
-          # Inside it: sub_82452E70 -> sub_8250AD38 -> sub_8250AE40 -> sub_822CEC80 (the views' update).
-          REX_EXTERN(__imp__sub_82453048);
-          REX_HOOK_RAW(sub_82453048) {
-            nfsmw::gsr2::EmpezarLlenado();
-            __imp__sub_82453048(ctx, base);
-            nfsmw::gsr2::TerminarLlenado();
-          }
-          '''
+              s += HOOK_BLOCK
               wr(p, s)
               print("patched carbon_graphics.cpp")
           PY
