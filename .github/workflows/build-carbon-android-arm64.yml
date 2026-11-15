@@ -710,6 +710,475 @@ jobs:
           ])
           PY
 
+      - name: Patch - GSR 2 temporal upscaler (victorgbd's port, pinned) for Carbon
+        shell: bash
+        run: |
+          set -euo pipefail
+          MWDIR="$W/_gsr2_src"
+          MW_SHA=3ac2fb698576d8889ade19660c38d0fd25f2c5a5
+          if [ ! -f "$MWDIR/nativo/app/src/nfsmw_gsr2.cpp" ] || [ "$(git -C "$MWDIR" rev-parse HEAD 2>/dev/null)" != "$MW_SHA" ]; then
+            rm -rf "$MWDIR"; mkdir -p "$MWDIR"
+            git -C "$MWDIR" init -q
+            git -C "$MWDIR" fetch -q --depth 1 https://github.com/victorgbd/NFSMW-Recompiled-Mobile.git "$MW_SHA"
+            git -C "$MWDIR" checkout -q FETCH_HEAD
+          fi
+          python3 - "$W/nfsmw-android" "$GITHUB_WORKSPACE" "$MWDIR/nativo" <<'PY'
+          #!/usr/bin/env python3
+          """GSR 2 (victorgbd's port for Most Wanted) onto the pinned nfsmw-android + Carbon.
+          usage: patch.py NFS_ROOT CARBON_ROOT MW_NATIVO_DIR
+          Idempotent (marker carbon-gsr2), strict anchors (exactly one match or fail)."""
+          import sys, os, shutil
+
+          NFS, C, MW = sys.argv[1], sys.argv[2], sys.argv[3]
+          APP = NFS + "/app/src"
+          SDK = NFS + "/sdk"
+
+
+          def rd(p):
+              return open(p, encoding="utf-8").read()
+
+
+          def wr(p, s):
+              open(p, "w", encoding="utf-8").write(s)
+
+
+          def once(s, old, new, what):
+              n = s.count(old)
+              if n != 1:
+                  sys.exit("ANCHOR %s: expected 1, found %d" % (what, n))
+              return s.replace(old, new)
+
+
+          # ---------------------------------------------------------------- 1. files from victorgbd's repo
+          for rel in ("app/src/nfsmw_gsr2.cpp", "app/src/nfsmw_gsr2.h",
+                      "app/src/shaders/nfsmw_sgsr2_convertir_ps.h", "app/src/shaders/nfsmw_sgsr2_escalar_ps.h"):
+              src = MW + "/" + rel
+              if not os.path.isfile(src):
+                  sys.exit("missing in victorgbd's checkout: " + src)
+          os.makedirs(APP + "/shaders", exist_ok=True)
+          g = APP + "/nfsmw_gsr2.cpp"
+          if os.path.exists(g) and "carbon-gsr2" in rd(g):
+              print("gsr2 sources already carbonised")
+          else:
+              for rel in ("app/src/nfsmw_gsr2.cpp", "app/src/nfsmw_gsr2.h",
+                          "app/src/shaders/nfsmw_sgsr2_convertir_ps.h", "app/src/shaders/nfsmw_sgsr2_escalar_ps.h"):
+                  shutil.copyfile(MW + "/" + rel, NFS + "/" + rel)
+              s = rd(g)
+              s = once(s, "constexpr uint32_t kTablaPases = 0x82C3F590;  // nfsmw_panoramico.cpp",
+                       "constexpr uint32_t kTablaPases = 0x82C721D0;  // carbon-gsr2: Carbon's view table (stride 480)", "tabla")
+              s = once(s, "constexpr uint32_t kBytesPorPase = 384;", "constexpr uint32_t kBytesPorPase = 480;", "bytes")
+              s = once(s, "constexpr uint32_t kOffDestino = 368;", "constexpr uint32_t kOffDestino = 464;", "offdest")
+              s = once(s, "  const uint32_t id = Leer32(base, vista + 4);\n", "  const uint32_t id = Leer32(base, vista + 8);  // Carbon: view id at eView+8\n", "id")
+              s = once(s, "Leer32(base, vista + 4) != kVistaEscena", "Leer32(base, vista + 8) != kVistaEscena", "id2")
+              s = once(s, "c.vp[i] = double(LeerFloat(base, bloque + 128 + i * 4));",
+                       "c.vp[i] = double(LeerFloat(base, bloque + 192 + i * 4));  // Carbon: view x projection at block+192", "vp")
+              wr(g, s)
+              print("gsr2 sources copied and carbonised")
+
+          # ---------------------------------------------------------------- 2. SDK
+          p = SDK + "/src/kernel/xboxkrnl/xboxkrnl_video.cpp"
+          s = rd(p)
+          if "carbon-gsr2" not in s:
+              s = once(s, "void VdSwap_entry(mapped_void buffer_ptr,",
+                       "// carbon-gsr2: if the app sets it, VdSwap writes what it returns as a fifth word of PM4_XE_SWAP (the game frame).\n"
+                       "uint32_t (*g_nfsmw_secuencia_swap)() = nullptr;\n\nvoid VdSwap_entry(mapped_void buffer_ptr,", "vdswap1")
+              s = once(s, "  dwords[offset++] = xenos::MakePacketType3(xenos::PM4_XE_SWAP, 4);\n",
+                       "  uint32_t (*const secuencia)() = g_nfsmw_secuencia_swap;\n"
+                       "  dwords[offset++] = xenos::MakePacketType3(xenos::PM4_XE_SWAP, secuencia ? 5 : 4);\n", "vdswap2")
+              s = once(s, "  dwords[offset++] = *width;\n  dwords[offset++] = *height;\n",
+                       "  dwords[offset++] = *width;\n  dwords[offset++] = *height;\n  if (secuencia) {\n    dwords[offset++] = secuencia();\n  }\n", "vdswap3")
+              wr(p, s)
+              print("patched xboxkrnl_video.cpp")
+
+          p = SDK + "/include/rex/ui/presenter.h"
+          s = rd(p)
+          if "carbon-gsr2" not in s:
+              s = once(s, "  bool RefreshGuestOutput(uint32_t frontbuffer_width, uint32_t frontbuffer_height,\n"
+                          "                          uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,\n"
+                          "                          std::function<bool(GuestOutputRefreshContext& context)> refresher);\n",
+                       "  bool RefreshGuestOutput(uint32_t frontbuffer_width, uint32_t frontbuffer_height,\n"
+                       "                          uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,\n"
+                       "                          std::function<bool(GuestOutputRefreshContext& context)> refresher);\n"
+                       "  // carbon-gsr2: the size of the surface painting is connected to (0 x 0 if none). Any thread.\n"
+                       "  void GetPaintSurfaceSize(uint32_t& width_out, uint32_t& height_out) const {\n"
+                       "    width_out = paint_surface_width_.load(std::memory_order_relaxed);\n"
+                       "    height_out = paint_surface_height_.load(std::memory_order_relaxed);\n"
+                       "  }\n", "presenter.h accessor")
+              s = once(s, "  uint32_t surface_width_in_paint_connection_ = 0;\n  uint32_t surface_height_in_paint_connection_ = 0;\n",
+                       "  uint32_t surface_width_in_paint_connection_ = 0;\n  uint32_t surface_height_in_paint_connection_ = 0;\n"
+                       "  std::atomic<uint32_t> paint_surface_width_{0};  // carbon-gsr2\n  std::atomic<uint32_t> paint_surface_height_{0};\n",
+                       "presenter.h members")
+              if "#include <atomic>" not in s:
+                  s = once(s, "#include <functional>\n", "#include <atomic>\n#include <functional>\n", "presenter.h include")
+              wr(p, s)
+              print("patched presenter.h")
+
+          p = SDK + "/src/ui/presenter.cpp"
+          s = rd(p)
+          if "carbon-gsr2" not in s:
+              s = once(s, "  surface_width_in_paint_connection_ = 0;\n  surface_height_in_paint_connection_ = 0;\n}\n",
+                       "  surface_width_in_paint_connection_ = 0;\n  surface_height_in_paint_connection_ = 0;\n"
+                       "  paint_surface_width_.store(0, std::memory_order_relaxed);  // carbon-gsr2\n"
+                       "  paint_surface_height_.store(0, std::memory_order_relaxed);\n}\n", "presenter.cpp disconnect")
+              s = once(s, "          surface_width_in_paint_connection_ = surface_width;\n          surface_height_in_paint_connection_ = surface_height;\n",
+                       "          surface_width_in_paint_connection_ = surface_width;\n          surface_height_in_paint_connection_ = surface_height;\n"
+                       "          paint_surface_width_.store(surface_width, std::memory_order_relaxed);  // carbon-gsr2\n"
+                       "          paint_surface_height_.store(surface_height, std::memory_order_relaxed);\n", "presenter.cpp connect")
+              wr(p, s)
+              print("patched presenter.cpp")
+
+          # ---------------------------------------------------------------- 3. sistema (the Swap packet)
+          p = APP + "/nfsmw_nativo_sistema.cpp"
+          s = rd(p)
+          if "carbon-gsr2" not in s:
+              s = once(s, '#include "nfsmw_esperas_tiron.h"\n', '#include "nfsmw_esperas_tiron.h"\n#include "nfsmw_gsr2.h"  // carbon-gsr2\n', "sistema include")
+              s = once(s, "          swap_alto_.store(datos.Leer(), std::memory_order_relaxed);\n        }\n        TrazaSwap();\n",
+                       "          swap_alto_.store(datos.Leer(), std::memory_order_relaxed);\n        }\n"
+                       "        nfsmw::gsr2::SwapEnAnillo(palabras >= 5 ? datos.Leer() : 0);  // carbon-gsr2: the game frame of this Swap\n"
+                       "        TrazaSwap();\n", "sistema swap")
+              wr(p, s)
+              print("patched nfsmw_nativo_sistema.cpp")
+
+          # ---------------------------------------------------------------- 4. destinos
+          p = APP + "/nfsmw_nativo_destinos.cpp"
+          s = rd(p)
+          if "carbon-gsr2" in s:
+              print("destinos already patched")
+          else:
+              s = once(s, '#include "nfsmw_ajustes_graficos.h"\n', '#include "nfsmw_ajustes_graficos.h"\n#include "nfsmw_gsr2.h"  // carbon-gsr2\n', "inc")
+              s = once(s, "// C2 report of readbacks per render target (base and size) and cadence of nfsmw_nativo_lecturas_cada.\nstruct DestinoLectura {",
+                       "// carbon-gsr2: one resolve of the frame (Copiar), to find the scene, the composited scene before the HUD and the\n"
+                       "// depth target when presenting.\n"
+                       "struct ResolucionFotograma {\n"
+                       "  uint32_t destino = 0;      // resolved texture address\n"
+                       "  uint64_t origen = 0;       // render target key (base, format, pitch), as in destinos_\n"
+                       "  uint32_t pitch = 0;\n"
+                       "  uint32_t info_profundidad = 0;  // RB_DEPTH_INFO at that moment\n"
+                       "  int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // the copied rectangle of the render target\n"
+                       "  uint32_t ancho = 0, alto = 0;  // the resolved texture's size\n"
+                       "  bool intercambio_rb = false;\n"
+                       "};\n"
+                       "constexpr size_t kResolucionesFotogramaMax = 64;\n\n"
+                       "// carbon-gsr2: what Presentar hands PintarSalida (the color image and its size are filled in there).\n"
+                       "struct PlanGsr2 {\n"
+                       "  bool activo = false;\n"
+                       "  uint32_t ancho_salida = 0, alto_salida = 0;\n"
+                       "  nfsmw::gsr2::EntradasVulkan entradas;\n"
+                       "};\n\n"
+                       "// C2 report of readbacks per render target (base and size) and cadence of nfsmw_nativo_lecturas_cada.\nstruct DestinoLectura {",
+                       "structs")
+              s = once(s, "  ~DestinosVulkan() override {\n    EsperarGpu();\n",
+                       "  ~DestinosVulkan() override {\n    EsperarGpu();\n    gsr2_.reset();  // carbon-gsr2: waits for the outputs; uses vs_ and sampler_\n", "dtor")
+              s = once(s, '    REXLOG_INFO("[nativo] C2: rampa de gamma del juego en la salida (nfsmw_nativo_rampa_gamma) = {}",\n'
+                          '                rampa_gamma_ ? "SI" : "no");\n',
+                       '    REXLOG_INFO("[nativo] C2: rampa de gamma del juego en la salida (nfsmw_nativo_rampa_gamma) = {}",\n'
+                       '                rampa_gamma_ ? "SI" : "no");\n'
+                       "    if (nfsmw::gsr2::Activo()) {  // carbon-gsr2\n"
+                       "      gsr2_ = nfsmw::gsr2::Gsr2Vulkan::Crear(\n"
+                       "          dispositivo_, vs_, sampler_, kRanurasSalida,\n"
+                       "          [](void* yo) { static_cast<DestinosVulkan*>(yo)->EsperarSalidas(); }, this);\n"
+                       "    }\n", "create")
+              s = once(s, "        if (resuelta && REXCVAR_GET(nfsmw_nativo_diag_resueltas) &&\n            resueltas_fotograma_.size() < 64 &&\n",
+                       "        if (resuelta && gsr2_ && resoluciones_fotograma_.size() < kResolucionesFotogramaMax) {\n"
+                       "          // carbon-gsr2: which resolve is the scene, which the composited scene before the HUD, and their depth.\n"
+                       "          ResolucionFotograma r;\n"
+                       "          r.destino = base & 0x1FFFFFFF;\n"
+                       "          r.origen = (uint64_t(info_color & 0xFFF) << 20) | (uint64_t(formato_color) << 16) | pitch;\n"
+                       "          r.pitch = pitch;\n"
+                       "          r.info_profundidad = reg.rb_depth_info;\n"
+                       "          r.x0 = x0;\n          r.y0 = y0;\n          r.x1 = x1;\n          r.y1 = y1;\n"
+                       "          r.ancho = resuelta->imagen.ancho;\n"
+                       "          r.alto = resuelta->imagen.alto;\n"
+                       "          r.intercambio_rb = resuelta->intercambio_rb;\n"
+                       "          resoluciones_fotograma_.push_back(r);\n"
+                       "        }\n"
+                       "        if (resuelta && REXCVAR_GET(nfsmw_nativo_diag_resueltas) &&\n            resueltas_fotograma_.size() < 64 &&\n",
+                       "copiar record")
+              s = once(s, "    Imagen* const origen_frontal = FrontalAlPresentar(base, ancho, alto);\n",
+                       "    Imagen* const origen_frontal = FrontalAlPresentar(base, ancho, alto);\n"
+                       "    // carbon-gsr2: what the upscaler needs from this frame's resolves (before forgetting them).\n"
+                       "    PlanGsr2 plan_gsr2;\n"
+                       "    PrepararGsr2(presentador, base, origen_frontal != nullptr, plan_gsr2);\n"
+                       "    resoluciones_fotograma_.clear();\n", "presentar plan")
+              s = once(s,
+                       "    presentador->RefreshGuestOutput(\n"
+                       "        w, h, 1280, 720, [&](rex::ui::Presenter::GuestOutputRefreshContext& base_contexto) {\n"
+                       "          entrada_llamada = std::chrono::steady_clock::now();\n"
+                       "          llamada = true;\n"
+                       "          auto& contexto =\n"
+                       "              static_cast<VulkanPresenter::VulkanGuestOutputRefreshContext&>(base_contexto);\n"
+                       "          pintado = PintarSalida(contexto, origen_frontal ? *origen_frontal : resuelta.imagen, w, h,\n"
+                       "                                 origen_frontal != nullptr);  // nfsmw_nativo_frontal_perezoso\n"
+                       "          salida_llamada = std::chrono::steady_clock::now();\n"
+                       "          return pintado;\n"
+                       "        });\n",
+                       "    // carbon-gsr2: the display proportion is the front buffer's own when it is wider than 16:9 (widescreen).\n"
+                       "    const bool mas_ancha = uint64_t(w) * 9 > uint64_t(h) * 16 + h;\n"
+                       "    // The presenter's image gets the screen's size and GSR 2 fills it, if the frame is smaller: the largest\n"
+                       "    // rectangle of the display proportion inside the screen.\n"
+                       "    if (plan_gsr2.activo) {\n"
+                       "      const uint64_t px = mas_ancha ? w : 1280, py = mas_ancha ? h : 720;\n"
+                       "      if (uint64_t(plan_gsr2.ancho_salida) * py > uint64_t(plan_gsr2.alto_salida) * px) {\n"
+                       "        plan_gsr2.ancho_salida = uint32_t(uint64_t(plan_gsr2.alto_salida) * px / py);\n"
+                       "      } else {\n"
+                       "        plan_gsr2.alto_salida = uint32_t(uint64_t(plan_gsr2.ancho_salida) * py / px);\n"
+                       "      }\n"
+                       "    }\n"
+                       "    const bool con_gsr2 = plan_gsr2.activo && (plan_gsr2.ancho_salida > w || plan_gsr2.alto_salida > h);\n"
+                       "    presentador->RefreshGuestOutput(\n"
+                       "        con_gsr2 ? plan_gsr2.ancho_salida : w, con_gsr2 ? plan_gsr2.alto_salida : h, mas_ancha ? w : 1280,\n"
+                       "        mas_ancha ? h : 720, [&](rex::ui::Presenter::GuestOutputRefreshContext& base_contexto) {\n"
+                       "          entrada_llamada = std::chrono::steady_clock::now();\n"
+                       "          llamada = true;\n"
+                       "          auto& contexto =\n"
+                       "              static_cast<VulkanPresenter::VulkanGuestOutputRefreshContext&>(base_contexto);\n"
+                       "          pintado = PintarSalida(contexto, origen_frontal ? *origen_frontal : resuelta.imagen, w, h,\n"
+                       "                                 origen_frontal != nullptr,  // nfsmw_nativo_frontal_perezoso\n"
+                       "                                 con_gsr2 ? &plan_gsr2 : nullptr);\n"
+                       "          salida_llamada = std::chrono::steady_clock::now();\n"
+                       "          return pintado;\n"
+                       "        });\n"
+                       "    if (gsr2_) {\n"
+                       "      nfsmw::gsr2::AnotarUso(con_gsr2 && llamada && ultimo_gsr2_hecho_);  // the game jitters only while it upscales\n"
+                       "    }\n", "presenter refresh")
+              # PrepararGsr2, before PintarSalida's comment
+              s = once(s, "  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n",
+                       "@@PREPARAR@@  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n", "prep anchor")
+              s = s.replace("@@PREPARAR@@", r'''  // carbon-gsr2: the frame's resolves -> what GSR 2 needs (plan.activo = false if something is missing).
+            void PrepararGsr2(rex::ui::Presenter* presentador, uint32_t base, bool desde_destino, PlanGsr2& plan) {
+              plan = PlanGsr2{};
+              if (!gsr2_ || !presentador || resoluciones_fotograma_.empty()) {
+                return;
+              }
+              presentador->GetPaintSurfaceSize(plan.ancho_salida, plan.alto_salida);
+              if (!plan.ancho_salida || !plan.alto_salida) {
+                return;
+              }
+              // The resolve that made the front buffer (the last one to that address).
+              size_t f = resoluciones_fotograma_.size();
+              for (size_t i = resoluciones_fotograma_.size(); i-- > 0;) {
+                if (resoluciones_fotograma_[i].destino == base) {
+                  f = i;
+                  break;
+                }
+              }
+              if (f == resoluciones_fotograma_.size()) {
+                if (avisos_gsr2_ < 3) {
+                  ++avisos_gsr2_;
+                  REXLOG_INFO("[gsr2] ningun resuelto del fotograma va al buffer frontal {:08X} ({} resueltos): se presenta como siempre",
+                              base, resoluciones_fotograma_.size());
+                }
+                return;
+              }
+              const ResolucionFotograma& frontal = resoluciones_fotograma_[f];
+              // The depth bound when that render target was resolved for the first time this frame (the scene).
+              uint32_t info_profundidad = frontal.info_profundidad;
+              for (size_t i = 0; i <= f; ++i) {
+                if (resoluciones_fotograma_[i].origen == frontal.origen) {
+                  info_profundidad = resoluciones_fotograma_[i].info_profundidad;
+                  break;
+                }
+              }
+              const uint64_t clave_profundidad = (uint64_t(info_profundidad & 0xFFF) << 20) |
+                                                 (uint64_t((info_profundidad >> 16) & 0x1) << 16) | frontal.pitch;
+              const auto it_profundidad = profundidades_.find(clave_profundidad);
+              if (it_profundidad == profundidades_.end() || !it_profundidad->second.preparada ||
+                  it_profundidad->second.contenido_invalido) {
+                if (!avisado_gsr2_sin_profundidad_) {
+                  avisado_gsr2_sin_profundidad_ = true;
+                  REXLOG_INFO("[gsr2] sin destino de profundidad para la escena (RB_DEPTH_INFO {:08X}, pitch {}): ese "
+                              "fotograma se presenta como siempre",
+                              info_profundidad, frontal.pitch);
+                }
+                return;
+              }
+              const Imagen& profundidad = it_profundidad->second;
+              nfsmw::gsr2::EntradasVulkan& e = plan.entradas;
+              e.profundidad = profundidad.imagen;
+              e.formato_profundidad = profundidad.formato;
+              e.profundidad_ancho = profundidad.ancho;
+              e.profundidad_alto = profundidad.alto;
+              e.rect_profundidad[0] = float(frontal.x0);
+              e.rect_profundidad[1] = float(frontal.y0);
+              e.rect_profundidad[2] = float(frontal.x1);
+              e.rect_profundidad[3] = float(frontal.y1);
+              // The composited scene before the HUD: the last earlier resolve of the same render target, the same size,
+              // to another texture.
+              bool con_escena = false;
+              for (size_t i = f; i-- > 0;) {
+                const ResolucionFotograma& r = resoluciones_fotograma_[i];
+                if (r.origen != frontal.origen || r.destino == base || r.ancho != frontal.ancho || r.alto != frontal.alto) {
+                  continue;
+                }
+                const auto it = resueltas_.find(r.destino);
+                if (it != resueltas_.end() && it->second.imagen.preparada && it->second.imagen.ancho == frontal.ancho &&
+                    it->second.imagen.alto == frontal.alto) {
+                  e.escena = it->second.imagen.vista;
+                  e.escena_rb = it->second.intercambio_rb != (desde_destino ? false : frontal.intercambio_rb);
+                  con_escena = true;
+                }
+                break;
+              }
+              if (avisos_gsr2_ < 3) {  // what was found, for the first frames (to tune it on the device)
+                ++avisos_gsr2_;
+                REXLOG_INFO("[gsr2] fotograma: buffer frontal {:08X} {}x{} (RT {:X}), profundidad {:08X} {}x{} pitch {}, rect "
+                            "({},{})-({},{}), {} resueltos, escena previa al HUD: {}, salida {}x{}",
+                            base, frontal.ancho, frontal.alto, frontal.origen, info_profundidad, profundidad.ancho,
+                            profundidad.alto, frontal.pitch, frontal.x0, frontal.y0, frontal.x1, frontal.y1,
+                            resoluciones_fotograma_.size(), con_escena ? "si" : "no", plan.ancho_salida, plan.alto_salida);
+              }
+              plan.activo = true;
+            }
+
+          ''')
+              # PintarSalida
+              s = once(s, "  bool PintarSalida(VulkanPresenter::VulkanGuestOutputRefreshContext& contexto, Imagen& origen,\n"
+                          "                    uint32_t ancho, uint32_t alto, bool desde_destino = false) {\n",
+                       "  bool PintarSalida(VulkanPresenter::VulkanGuestOutputRefreshContext& contexto, Imagen& origen,\n"
+                       "                    uint32_t ancho, uint32_t alto, bool desde_destino = false, PlanGsr2* plan = nullptr) {\n"
+                       "    // carbon-gsr2: with a plan, the output (the presenter's image) has the screen's size.\n"
+                       "    const uint32_t ancho_salida = plan ? plan->ancho_salida : ancho;\n"
+                       "    const uint32_t alto_salida = plan ? plan->alto_salida : alto;\n", "pintar sig")
+              s = once(s, "      info.width = ancho;\n      info.height = alto;\n      info.layers = 1;\n",
+                       "      info.width = ancho_salida;\n      info.height = alto_salida;\n      info.layers = 1;\n", "fb size")
+              s = once(s,
+                       "    VkDescriptorImageInfo info_imagen{};\n"
+                       "    info_imagen.imageView = origen.vista;\n"
+                       "    info_imagen.imageLayout = VK_IMAGE_LAYOUT_GENERAL;\n"
+                       "    VkWriteDescriptorSet escritura{};\n"
+                       "    escritura.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;\n"
+                       "    escritura.dstSet = descriptores_salida_[s];\n"
+                       "    escritura.dstBinding = 0;\n"
+                       "    escritura.descriptorCount = 1;\n"
+                       "    escritura.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;\n"
+                       "    escritura.pImageInfo = &info_imagen;\n"
+                       "    dfn_.vkUpdateDescriptorSets(device_, 1, &escritura, 0, nullptr);\n\n"
+                       "    dfn_.vkResetCommandPool(device_, pools_salida_[s], 0);\n",
+                       "    dfn_.vkResetCommandPool(device_, pools_salida_[s], 0);\n", "descriptor block")
+              s = once(s, "    pase.renderArea.extent = {ancho, alto};\n", "    pase.renderArea.extent = {ancho_salida, alto_salida};\n", "render area")
+              s = once(s,
+                       "    dfn_.vkCmdBeginRenderPass(comandos_salida_[s], &pase, VK_SUBPASS_CONTENTS_INLINE);\n"
+                       "    const VkViewport viewport{0.0f, 0.0f, float(ancho), float(alto), 0.0f, 1.0f};\n"
+                       "    dfn_.vkCmdSetViewport(comandos_salida_[s], 0, 1, &viewport);\n"
+                       "    const VkRect2D tijera{{0, 0}, {ancho, alto}};\n",
+                       "    // carbon-gsr2: both passes before the output pass, which then reads the upscaled image 1 to 1.\n"
+                       "    VkImageView vista_fuente = origen.vista;\n"
+                       "    uint32_t fuente_ancho = origen.ancho, fuente_alto = origen.alto;\n"
+                       "    bool gsr2_hecho = false;\n"
+                       "    if (plan && gsr2_) {\n"
+                       "      plan->entradas.color = origen.vista;\n"
+                       "      plan->entradas.ancho = ancho;\n"
+                       "      plan->entradas.alto = alto;\n"
+                       "      const VkImageView escalada = gsr2_->Grabar(comandos_salida_[s], s, plan->entradas, ancho_salida, alto_salida,\n"
+                       "                                                 nfsmw::gsr2::CamaraDelSwap());\n"
+                       "      if (escalada != VK_NULL_HANDLE) {\n"
+                       "        vista_fuente = escalada;\n"
+                       "        fuente_ancho = ancho_salida;\n"
+                       "        fuente_alto = alto_salida;\n"
+                       "        gsr2_hecho = true;\n"
+                       "      }\n"
+                       "    }\n"
+                       "    ultimo_gsr2_hecho_ = gsr2_hecho;\n"
+                       "    VkDescriptorImageInfo info_imagen{};\n"
+                       "    info_imagen.imageView = vista_fuente;\n"
+                       "    info_imagen.imageLayout = VK_IMAGE_LAYOUT_GENERAL;\n"
+                       "    VkWriteDescriptorSet escritura{};\n"
+                       "    escritura.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;\n"
+                       "    escritura.dstSet = descriptores_salida_[s];\n"
+                       "    escritura.dstBinding = 0;\n"
+                       "    escritura.descriptorCount = 1;\n"
+                       "    escritura.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;\n"
+                       "    escritura.pImageInfo = &info_imagen;\n"
+                       "    dfn_.vkUpdateDescriptorSets(device_, 1, &escritura, 0, nullptr);\n\n"
+                       "    dfn_.vkCmdBeginRenderPass(comandos_salida_[s], &pase, VK_SUBPASS_CONTENTS_INLINE);\n"
+                       "    const VkViewport viewport{0.0f, 0.0f, float(ancho_salida), float(alto_salida), 0.0f, 1.0f};\n"
+                       "    dfn_.vkCmdSetViewport(comandos_salida_[s], 0, 1, &viewport);\n"
+                       "    const VkRect2D tijera{{0, 0}, {ancho_salida, alto_salida}};\n", "gsr block")
+              s = once(s,
+                       "      const bool exacta = desde_destino || (ancho == origen.ancho && alto == origen.alto);\n"
+                       "      const bool fxaa = !desde_destino && nfsmw::ajustes::AntialiasingFxaa();\n",
+                       "      // With GSR 2 the upscaled image has the output's size and is already antialiased (no FXAA). With a GSR 2\n"
+                       "      // plan that could not run, the output is larger than the frame: bilinear.\n"
+                       "      const bool exacta = gsr2_hecho || (desde_destino && !plan) ||\n"
+                       "                          (ancho_salida == fuente_ancho && alto_salida == fuente_alto);\n"
+                       "      const bool fxaa = !desde_destino && !gsr2_hecho && nfsmw::ajustes::AntialiasingFxaa();\n", "exacta")
+              s = once(s,
+                       '        REXLOG_INFO("[nativo] C2: salida de {}x{} desde un origen de {}x{}: rampa con muestreo bilineal", ancho,\n'
+                       "                    alto, origen.ancho, origen.alto);\n",
+                       '        REXLOG_INFO("[nativo] C2: salida de {}x{} desde un origen de {}x{}: rampa con muestreo bilineal",\n'
+                       "                    ancho_salida, alto_salida, fuente_ancho, fuente_alto);\n", "bilinear log")
+              s = once(s, "    } bilineal = {{0, 0}, {1.0f / float(ancho), 1.0f / float(alto)}};\n",
+                       "    } bilineal = {{0, 0}, {1.0f / float(ancho_salida), 1.0f / float(alto_salida)}};\n", "bilineal")
+              s = once(s, "    if (desde_destino) {\n      // And nothing submitted later (the next frame draws and clears that image again) writes it before the\n",
+                       "    if (gsr2_hecho) {\n"
+                       "      // The next frame's work writes again what GSR 2 read (color, depth, the copy) and the next output the\n"
+                       "      // other history image: after this one has read them.\n"
+                       "      dfn_.vkCmdPipelineBarrier(comandos_salida_[s], VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,\n"
+                       "                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);\n"
+                       "    } else if (desde_destino) {\n"
+                       "      // And nothing submitted later (the next frame draws and clears that image again) writes it before the\n", "post barrier")
+              s = once(s, "  VkSampler sampler_ = VK_NULL_HANDLE;\n",
+                       "  VkSampler sampler_ = VK_NULL_HANDLE;\n"
+                       "  // carbon-gsr2: the upscaler (only with the cvar) and this frame's resolves (Copiar -> Presentar).\n"
+                       "  std::unique_ptr<nfsmw::gsr2::Gsr2Vulkan> gsr2_;\n"
+                       "  std::vector<ResolucionFotograma> resoluciones_fotograma_;\n"
+                       "  bool avisado_gsr2_sin_profundidad_ = false;\n"
+                       "  bool ultimo_gsr2_hecho_ = false;  // PintarSalida -> Presentar\n"
+                       "  int avisos_gsr2_ = 0;\n", "members")
+              wr(p, s)
+              print("patched nfsmw_nativo_destinos.cpp")
+
+          # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
+          p = C + "/CMakeLists.txt"
+          s = rd(p)
+          if "nfsmw_gsr2.cpp" in s:
+              print("CMakeLists already has gsr2")
+          else:
+              s = once(s, "    ${NFSC_NFSMW_SRC}/nfsmw_ajustes_graficos.cpp)\n",
+                       "    ${NFSC_NFSMW_SRC}/nfsmw_ajustes_graficos.cpp\n    ${NFSC_NFSMW_SRC}/nfsmw_gsr2.cpp)\n", "cmake")
+              wr(p, s)
+              print("patched CMakeLists.txt")
+
+          p = C + "/android/app/src/main/cpp/carbon_graphics.cpp"
+          s = rd(p)
+          if "carbon-gsr2" in s:
+              print("carbon_graphics.cpp already patched")
+          else:
+              if "carbon-ws2" not in s:
+                  sys.exit("carbon_graphics.cpp lacks the widescreen v2 patch (needed: this step hooks its camera functions)")
+              s = once(s, "#include <SDL3/SDL_video.h>\n", "#include <SDL3/SDL_video.h>\n#include \"nfsmw_gsr2.h\"  // carbon-gsr2\n", "cg include")
+              s = once(s, "  __imp__sub_822CEC80(ctx, base);\n",
+                       "  __imp__sub_822CEC80(ctx, base);\n"
+                       "  // carbon-gsr2: the view x projection (block + 192) is final here; view 1's is the camera of the frame.\n"
+                       "  if (t_block && t_view && verified && CameraCodeIsCarbon(base)) nfsmw::gsr2::TrasUpdate(base, t_view, t_block);\n",
+                       "cg cec80")
+              s = once(s, "  __imp__sub_822CEA90(ctx, base);\n",
+                       "  __imp__sub_822CEA90(ctx, base);\n"
+                       "  // carbon-gsr2: at the end of this hook (after the widescreen correction) the frame's jitter goes into the projection\n"
+                       "  // (+64 and its copy +128), before sub_822CEC80 multiplies it by the view.\n"
+                       "  struct Gsr2Jitter {\n"
+                       "    uint8_t* base;\n"
+                       "    ~Gsr2Jitter() {\n"
+                       "      if (t_block && t_view && verified && CameraCodeIsCarbon(base)) {\n"
+                       "        nfsmw::gsr2::AjustarProyeccion(base, t_view, t_block + 64);\n"
+                       "        nfsmw::gsr2::AjustarProyeccion(base, t_view, t_block + 128);\n"
+                       "      }\n"
+                       "    }\n"
+                       "  } gsr2_jitter{base};\n", "cg cea90")
+              s += r'''
+          // carbon-gsr2: one camera and one jitter phase per frame. sub_82453428 (only caller: sub_824E99C0, the render thread's
+          // entry) runs every view update of a frame (sub_82452788 / sub_82453048 -> sub_8250AD38 -> sub_8250AE40 -> sub_822CEC80).
+          REX_EXTERN(__imp__sub_82453428);
+          REX_HOOK_RAW(sub_82453428) {
+            nfsmw::gsr2::EmpezarLlenado();
+            __imp__sub_82453428(ctx, base);
+            nfsmw::gsr2::TerminarLlenado();
+          }
+          '''
+              wr(p, s)
+              print("patched carbon_graphics.cpp")
+          PY
+
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
