@@ -785,7 +785,15 @@ jobs:
               s = once(s, "Leer32(base, vista + 4) != kVistaEscena", "Leer32(base, vista + 8) != kVistaEscena", "id2")
               s = once(s, "c.vp[i] = double(LeerFloat(base, bloque + 128 + i * 4));",
                        "c.vp[i] = double(LeerFloat(base, bloque + 192 + i * 4));  // Carbon: view x projection at block+192", "vp")
+              s = once(s, "    reset = reset || !camara.valida || !anterior_.valida;\n",
+                       "    reset = reset || !camara.valida || !anterior_.valida || e.solo_2d;  // carbon-gsr2: a frame of 2D only has nothing to accumulate\n", "solo2d use")
               wr(g, s)
+              h = APP + "/nfsmw_gsr2.h"
+              sh = rd(h)
+              sh = once(sh, "  bool escena_rb = false;  // red and blue swapped relative to color\n",
+                        "  bool escena_rb = false;  // red and blue swapped relative to color\n"
+                        "  bool solo_2d = false;    // carbon-gsr2: no 3D draw this frame (menus): no history, just the upscale\n", "solo2d field")
+              wr(h, sh)
               print("gsr2 sources copied and carbonised")
 
           # ---------------------------------------------------------------- 2. SDK
@@ -880,6 +888,16 @@ jobs:
                        "};\n\n"
                        "// C2 report of readbacks per render target (base and size) and cadence of nfsmw_nativo_lecturas_cada.\nstruct DestinoLectura {",
                        "structs")
+              s = once(s, "#include <rex/graphics/xenos.h>\n", "#include <rex/graphics/registers.h>\n#include <rex/graphics/xenos.h>\n", "regs inc")
+              s = once(s, "namespace xenos = rex::graphics::xenos;\n", "namespace xenos = rex::graphics::xenos;\nnamespace gr = rex::graphics;\n", "gr alias")
+              s = once(s, "  bool Dibujar(const PeticionDibujo& peticion) override {\n",
+                       "  bool Dibujar(const PeticionDibujo& peticion) override {\n"
+                       "    if (gsr_rt_ != 0) {\n"
+                       "      GsrAntesDeDibujo(peticion);  // carbon-gsr2: the scene before the HUD\n"
+                       "    }\n", "dibujar hook")
+              s = once(s, "    AnotarAreaUtil(*destino_render, y1);\n",
+                       "    GsrAntesDeResolver(*destino_render, info_color & 0xFFF, pitch);  // carbon-gsr2\n"
+                       "    AnotarAreaUtil(*destino_render, y1);\n", "copiar hook")
               s = once(s, "  ~DestinosVulkan() override {\n    EsperarGpu();\n",
                        "  ~DestinosVulkan() override {\n    EsperarGpu();\n    gsr2_.reset();  // carbon-gsr2: waits for the outputs; uses vs_ and sampler_\n", "dtor")
               s = once(s, '    REXLOG_INFO("[nativo] C2: rampa de gamma del juego en la salida (nfsmw_nativo_rampa_gamma) = {}",\n'
@@ -911,7 +929,8 @@ jobs:
                        "    Imagen* const origen_frontal = FrontalAlPresentar(base, ancho, alto);\n"
                        "    // carbon-gsr2: what the upscaler needs from this frame's resolves (before forgetting them).\n"
                        "    PlanGsr2 plan_gsr2;\n"
-                       "    PrepararGsr2(presentador, base, origen_frontal != nullptr, plan_gsr2);\n"
+                       "    PrepararGsr2(presentador, base, origen_frontal, plan_gsr2);\n"
+                       "    GsrFinDeFotograma();\n"
                        "    resoluciones_fotograma_.clear();\n", "presentar plan")
               s = once(s,
                        "    presentador->RefreshGuestOutput(\n"
@@ -958,9 +977,151 @@ jobs:
               prep = open(os.path.dirname(os.path.abspath(__file__)) + "/prepararGsr2.inc").read() if False else None
               s = once(s, "  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n",
                        "@@PREPARAR@@  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n", "prep anchor")
-              s = s.replace("@@PREPARAR@@", r'''  // carbon-gsr2: the frame's resolves -> what GSR 2 needs (plan.activo = false if something is missing).
-            void PrepararGsr2(rex::ui::Presenter* presentador, uint32_t base, bool desde_destino, PlanGsr2& plan) {
+              s = s.replace("@@PREPARAR@@", r'''  // carbon-gsr2: the composited scene before the HUD, copied when the draws to the front render target change from
+            // "scene" (depth tested, or opaque) to "HUD" (depth off and blended: FEng text, icons, the rain). GSR 2 compares the
+            // final frame with this copy to find the HUD pixels: those are not 3D (no jitter, no history). The copy goes to a
+            // texture with a made-up address, in the same format as the image GSR 2 reads, so both match bit for bit.
+            static constexpr uint32_t kClaveInstantaneaGsr = 0x3FFF0000u;  // outside the 512 MB of guest memory
+
+            bool GsrEsElDestinoFrontal(uint32_t base_rt, uint32_t pitch) const {
+              return gsr_rt_ != 0 && base_rt == uint32_t((gsr_rt_ >> 20) & 0xFFF) && pitch == uint32_t(gsr_rt_ & 0xFFFF);
+            }
+
+            void GsrInstantanea(Imagen& rt) {
+              if (gsr_snaps_ >= 8 || gsr_formato_ == VK_FORMAT_UNDEFINED || !dibujos_ || !Grabar() || rt.contenido_invalido) {
+                return;
+              }
+              const bool igual = rt.formato == gsr_formato_;
+              if (igual ? !copiar_imagen_ : !blit_) {
+                return;
+              }
+              dibujos_->TerminarPase();  // a copy is not allowed inside a pass (the next draw resumes it)
+              Resuelta* s = ObtenerResuelta(kClaveInstantaneaGsr, gsr_ancho_, gsr_alto_, 0, false, gsr_formato_);
+              if (!s) {
+                return;
+              }
+              Preparar(rt);
+              Preparar(s->imagen);
+              const int64_t x0 = std::max<int32_t>(gsr_rect_[0], 0), y0 = std::max<int32_t>(gsr_rect_[1], 0);
+              const int64_t dx = gsr_dx_, dy = gsr_dy_;
+              const int64_t ancho = std::min<int64_t>({int64_t(gsr_rect_[2]) - x0, int64_t(rt.ancho) - x0, int64_t(s->imagen.ancho) - dx});
+              const int64_t alto = std::min<int64_t>({int64_t(gsr_rect_[3]) - y0, int64_t(rt.alto) - y0, int64_t(s->imagen.alto) - dy});
+              if (ancho <= 0 || alto <= 0) {
+                return;
+              }
+              MarcarGpu(kGpuCopias);
+              if (igual) {
+                VkImageCopy copia{};
+                copia.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copia.srcOffset = {int32_t(x0), int32_t(y0), 0};
+                copia.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copia.dstOffset = {int32_t(dx), int32_t(dy), 0};
+                copia.extent = {uint32_t(ancho), uint32_t(alto), 1};
+                copiar_imagen_(comandos_trabajo_, rt.imagen, VK_IMAGE_LAYOUT_GENERAL, s->imagen.imagen, VK_IMAGE_LAYOUT_GENERAL, 1,
+                               &copia);
+              } else {
+                VkImageBlit conversion{};  // a half float render target to an 8-bit texture (as Copiar does)
+                conversion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                conversion.srcOffsets[0] = {int32_t(x0), int32_t(y0), 0};
+                conversion.srcOffsets[1] = {int32_t(x0 + ancho), int32_t(y0 + alto), 1};
+                conversion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                conversion.dstOffsets[0] = {int32_t(dx), int32_t(dy), 0};
+                conversion.dstOffsets[1] = {int32_t(dx + ancho), int32_t(dy + alto), 1};
+                blit_(comandos_trabajo_, rt.imagen, VK_IMAGE_LAYOUT_GENERAL, s->imagen.imagen, VK_IMAGE_LAYOUT_GENERAL, 1,
+                      &conversion, VK_FILTER_NEAREST);
+              }
+              ++gsr_snaps_;
+              gsr_snap_valida_ = true;
+            }
+
+            // The run-length list of draw classes of the frame, for the log: S = depth tested, O = opaque without depth,
+            // H = blended without depth.
+            void GsrAnotarTramo(char clase, uint32_t huella) {
+              if (clase == gsr_clase_tramo_) {
+                ++gsr_cuenta_tramo_;
+                return;
+              }
+              if (gsr_clase_tramo_ && gsr_secuencia_.size() < 400) {
+                gsr_secuencia_ += fmt::format(" {}{}", gsr_clase_tramo_, gsr_cuenta_tramo_);
+                if (gsr_clase_tramo_ != 'S') {
+                  gsr_secuencia_ += fmt::format("({:08X})", gsr_huella_tramo_);
+                }
+              }
+              gsr_clase_tramo_ = clase;
+              gsr_cuenta_tramo_ = 1;
+              gsr_huella_tramo_ = huella;
+            }
+
+            void GsrAntesDeDibujo(const PeticionDibujo& p) {
+              const uint32_t* r = p.registros;
+              if (!r || !dibujos_) {
+                return;
+              }
+              if ((r[gr::XE_GPU_REG_RB_MODECONTROL] & 0x7) != uint32_t(xenos::EdramMode::kColorDepth)) {
+                return;
+              }
+              const uint32_t info = r[gr::XE_GPU_REG_RB_COLOR_INFO];
+              const uint32_t pitch = r[gr::XE_GPU_REG_RB_SURFACE_INFO] & 0x3FFF;
+              if (!GsrEsElDestinoFrontal(info & 0xFFF, pitch) || (r[gr::XE_GPU_REG_RB_COLOR_MASK] & 0xF) == 0) {
+                return;
+              }
+              const uint32_t control_z = r[gr::XE_GPU_REG_RB_DEPTHCONTROL];
+              const uint32_t mezcla = r[gr::XE_GPU_REG_RB_BLENDCONTROL0];
+              const bool con_z = ((control_z >> 1) & 0x1) != 0;
+              const bool opaco = (mezcla & 0x1F) == 1 && ((mezcla >> 8) & 0x1F) == 0;  // ONE, ZERO
+              const bool hud = !con_z && !opaco;
+              const uint32_t huella = p.ps ? uint32_t(p.ps->huella) : 0;
+              GsrAnotarTramo(con_z ? 'S' : (opaco ? 'O' : 'H'), huella);
+              if (!hud) {
+                gsr_vio_escena_ = true;
+                gsr_en_hud_ = false;
+                ++gsr_n_escena_;
+                return;
+              }
+              ++gsr_n_hud_;
+              if (gsr_vio_escena_ && !gsr_en_hud_) {
+                gsr_en_hud_ = true;
+                ++gsr_cortes_;
+                Imagen* rt = ObtenerDestino(info & 0xFFF, (info >> 16) & 0xF, pitch);
+                if (rt) {
+                  GsrInstantanea(*rt);
+                }
+              }
+            }
+
+            // A resolve of the render target (the front buffer's, or any other of the frame): if scene draws came after the
+            // last copy, the HUD is empty this frame (or nothing came after them): the copy is the frame itself.
+            void GsrAntesDeResolver(Imagen& rt, uint32_t base_rt, uint32_t pitch) {
+              if (!GsrEsElDestinoFrontal(base_rt, pitch) || !gsr_vio_escena_ || gsr_en_hud_) {
+                return;
+              }
+              gsr_en_hud_ = true;
+              GsrInstantanea(rt);
+            }
+
+            void GsrFinDeFotograma() {
+              if (gsr_rt_ == 0) {
+                return;
+              }
+              ++gsr_fotogramas_;
+              if (gsr_fotogramas_ <= 6 || gsr_fotogramas_ % 900 == 0) {
+                GsrAnotarTramo(0, 0);  // closes the last run
+                REXLOG_INFO("[gsr2] dibujos al RT frontal (fotograma {}): {} de escena (S con profundidad, O opacos), {} de HUD (H sin "
+                            "profundidad y con mezcla), {} cortes, {} copias de la escena previa al HUD ({}); secuencia:{}",
+                            gsr_fotogramas_, gsr_n_escena_, gsr_n_hud_, gsr_cortes_, gsr_snaps_, gsr_snap_valida_ ? "valida" : "NINGUNA",
+                            gsr_secuencia_);
+              }
+              gsr_vio_escena_ = gsr_en_hud_ = gsr_snap_valida_ = false;
+              gsr_snaps_ = gsr_n_escena_ = gsr_n_hud_ = gsr_cortes_ = 0;
+              gsr_clase_tramo_ = 0;
+              gsr_cuenta_tramo_ = 0;
+              gsr_secuencia_.clear();
+            }
+
+            // carbon-gsr2: the frame's resolves -> what GSR 2 needs (plan.activo = false if something is missing).
+            void PrepararGsr2(rex::ui::Presenter* presentador, uint32_t base, Imagen* origen_frontal, PlanGsr2& plan) {
               plan = PlanGsr2{};
+              const bool desde_destino = origen_frontal != nullptr;
               if (!gsr2_ || !presentador || resoluciones_fotograma_.empty()) {
                 return;
               }
@@ -985,6 +1146,24 @@ jobs:
                 return;
               }
               const ResolucionFotograma& frontal = resoluciones_fotograma_[f];
+              // What the copy of the scene before the HUD must look like (next frame): the same image GSR 2 reads as color.
+              const Imagen* imagen_color = origen_frontal;
+              if (!imagen_color) {
+                const auto itc = resueltas_.find(base);
+                imagen_color = itc != resueltas_.end() ? &itc->second.imagen : nullptr;
+              }
+              if (imagen_color && imagen_color->formato != VK_FORMAT_UNDEFINED) {
+                gsr_rt_ = frontal.origen;
+                gsr_formato_ = imagen_color->formato;
+                gsr_ancho_ = imagen_color->ancho;
+                gsr_alto_ = imagen_color->alto;
+                gsr_dx_ = desde_destino ? frontal.x0 : 0;
+                gsr_dy_ = desde_destino ? frontal.y0 : 0;
+                gsr_rect_[0] = frontal.x0;
+                gsr_rect_[1] = frontal.y0;
+                gsr_rect_[2] = frontal.x1;
+                gsr_rect_[3] = frontal.y1;
+              }
               // The depth bound when that render target was resolved for the first time this frame (the scene).
               uint32_t info_profundidad = frontal.info_profundidad;
               for (size_t i = 0; i <= f; ++i) {
@@ -1016,12 +1195,23 @@ jobs:
               e.rect_profundidad[1] = float(frontal.y0);
               e.rect_profundidad[2] = float(frontal.x1);
               e.rect_profundidad[3] = float(frontal.y1);
-              // The composited scene before the HUD: the last earlier resolve of the same render target, the same size,
-              // to another texture.
+              // A frame with HUD draws only (a 2D menu page) has no 3D to accumulate: it is upscaled without history.
+              e.solo_2d = !gsr_vio_escena_ && gsr_n_hud_ > 0;
+              // The composited scene before the HUD: our own copy (GsrInstantanea), or as Most Wanted does it: the last earlier
+              // resolve of the same render target, the same size, to another texture.
               bool con_escena = false;
-              bool escena_laxa = false;
-              for (int pasada = 0; pasada < 2 && !con_escena; ++pasada) {
-                // pasada 0: as Most Wanted (the same render target); pasada 1 (Carbon): any earlier resolve of the same size
+              bool escena_laxa = false;  // true: our own copy
+              if (gsr_snap_valida_ && imagen_color) {
+                const auto its = resueltas_.find(kClaveInstantaneaGsr);
+                if (its != resueltas_.end() && its->second.imagen.preparada && its->second.imagen.ancho == imagen_color->ancho &&
+                    its->second.imagen.alto == imagen_color->alto && its->second.imagen.formato == imagen_color->formato) {
+                  e.escena = its->second.imagen.vista;
+                  e.escena_rb = false;  // the same render target's data, in the same order as the color
+                  con_escena = true;
+                  escena_laxa = true;
+                }
+              }
+              for (int pasada = 0; pasada < 1 && !con_escena; ++pasada) {
                 for (size_t i = f; i-- > 0;) {
                   const ResolucionFotograma& r = resoluciones_fotograma_[i];
                   if ((pasada == 0 && r.origen != frontal.origen) || r.destino == base || r.ancho != frontal.ancho ||
@@ -1034,7 +1224,7 @@ jobs:
                     e.escena = it->second.imagen.vista;
                     e.escena_rb = it->second.intercambio_rb != (desde_destino ? false : frontal.intercambio_rb);
                     con_escena = true;
-                    escena_laxa = pasada == 1;
+                    escena_laxa = false;
                   }
                   break;
                 }
@@ -1051,7 +1241,7 @@ jobs:
                             "({},{})-({},{}), {} resueltos, escena previa al HUD: {}, salida {}x{}",
                             base, frontal.ancho, frontal.alto, frontal.origen, info_profundidad, profundidad.ancho,
                             profundidad.alto, frontal.pitch, frontal.x0, frontal.y0, frontal.x1, frontal.y1,
-                            resoluciones_fotograma_.size(), con_escena ? (escena_laxa ? "si (cualquiera del mismo tamano)" : "si") : "no",
+                            resoluciones_fotograma_.size(), con_escena ? (escena_laxa ? "si (copia propia)" : "si (resuelto)") : "no",
                             plan.ancho_salida, plan.alto_salida);
               }
               plan.activo = true;
@@ -1151,7 +1341,21 @@ jobs:
                        "  std::vector<ResolucionFotograma> resoluciones_fotograma_;\n"
                        "  bool avisado_gsr2_sin_profundidad_ = false;\n"
                        "  bool ultimo_gsr2_hecho_ = false;  // PintarSalida -> Presentar\n"
-                       "  int avisos_gsr2_ = 0;\n", "members")
+                       "  int avisos_gsr2_ = 0;\n"
+                       "  // carbon-gsr2: the scene before the HUD (GsrAntesDeDibujo). What the next frame's copy must look like comes\n"
+                       "  // from the previous frame's plan (PrepararGsr2).\n"
+                       "  uint64_t gsr_rt_ = 0;  // front render target key (as ResolucionFotograma::origen); 0 = not known yet\n"
+                       "  VkFormat gsr_formato_ = VK_FORMAT_UNDEFINED;\n"
+                       "  uint32_t gsr_ancho_ = 0, gsr_alto_ = 0;\n"
+                       "  int32_t gsr_dx_ = 0, gsr_dy_ = 0;\n"
+                       "  int32_t gsr_rect_[4] = {};\n"
+                       "  bool gsr_vio_escena_ = false, gsr_en_hud_ = false, gsr_snap_valida_ = false;\n"
+                       "  uint32_t gsr_snaps_ = 0, gsr_n_escena_ = 0, gsr_n_hud_ = 0, gsr_cortes_ = 0;\n"
+                       "  uint32_t gsr_cuenta_tramo_ = 0;\n"
+                       "  char gsr_clase_tramo_ = 0;\n"
+                       "  uint32_t gsr_huella_tramo_ = 0;\n"
+                       "  std::string gsr_secuencia_;\n"
+                       "  uint32_t gsr_fotogramas_ = 0;\n", "members")
               wr(p, s)
               print("patched nfsmw_nativo_destinos.cpp")
 
