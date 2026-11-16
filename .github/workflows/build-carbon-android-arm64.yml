@@ -806,225 +806,20 @@ jobs:
               wr(h, sh)
               print("gsr2 2D-only flag added")
 
-          # carbon-gsr2 (3rd round): smooth enlargement of the HUD/menu pixels in the upscale pass (Catmull-Rom of the final frame:
-          # the cross-shaped sharpening filter alone leaves dotted edges without jitter and history) and the debug views
-          # (nfsmw_gsr2_depurar). The shader is ws/gsr2/escalar_carbon.frag compiled to SPIR-V 1.0, stored zlib+base64.
-          ESC_HEADER_B64 = (
-              "eNqtfV2vLbmN3bt/xX1MkDvjkqivSpCH+kTyFiRIXgaDRo/H4wyQsQduOw4Q5L+n6ux9dpHapLTqXDfQwO7TRVGiligtiZR+/etv"
-              "v/n5j//wh9//ze9++aP/999+/0+//Mtffvrl/I+ffvvLb37+Xz//8W//6Y8//+7bv/v2n/77+u2Xf/nDH/70P7/9+V/P//Xbbz//"
-              "/h+//eNv/+HPv/v2v//5t3/55du/+csvvz5Ff/0U/elR9kcJ//b7t//2X/7zf/2b//HN/e3wq9/84fe//Onbn//5938i/9OfNLU/"
-              "/esvf/f33/7jt//7q2/HP8P/GbKnwQ/0/fw9DO74d3j+Lse/8/P3MITZv35f3/hDxLG/f/5OH7KfOtj/C0uksIR8/k4hh0x+O3/T"
-              "QMf/ePyudNDxr/b3R5mXjnz8u7P/F+rfaUtjcmnVy6L4+u1ebaLTJFU7eLmZ1ZHY3y9bueXzdzj+jWadpI6B2ZHLTOfv02rJhfQh"
-              "T0cJLiznb1+Ov+95enxPM7mUhG6pY/yQj2dZyRt257qX63ce9W+krci/vqva7sJTd4j765ujA199U6rvP/r1o6Zj8J86Dtny2Z85"
-              "p5jGnJ728YcdPtpx/P8DWLF8lnV89dmOKHX4+Pj+kHXx1Y7sczhkXpg5Lfz9wluq5bkNj/aMaUkfuMg+DmmPj3YvgXJKoj/Ob1mf"
-              "W+W6x7g5+jzmjz5LY6SjxvFq32f/P8sRfS7K8o86HtaKjzZ9lHX8l1JWq630qcOq19EDnpX1URxQbhD1+9TB6vjFcuMTI+HonQ/Z"
-              "lML+UdfPPg8foyJ918ejVe5jPC4n4vKjz8OBJN43+9HHV3+URlkP/5gOFPsnjsfTuo92x/347VL4xPdR10uHO/B96ZgaOgqqI5+o"
-              "j5/68sR1nD1+yK1XG3MA+mCEdL/acYwOyh7og+nZB8snDum0+pai0pelMz7mh49K62njj997SKd/+Pid0xbcw98cfy/Mr5xN96CO"
-              "5TEnfswCHzY8PMPwOW4+fM/2GJsfo8B/+ojzry9/ETs61pefj5n5+Vc/tey5PWXTWUM2zsfTx17fJQf0+cPH0IcXX5/9/OFtH209"
-              "Wrdm4RPPsdSvoxseZeVzHi3PPqvHxIb5xMe8z+UPv70z+VMcwKF7zVECi87EYjU/+nzNRS+fdo7CVcxdsh1b7X/Saen0qe9jTgy6"
-              "Pnr4q5SPmoYi6nfpqNYij/XS4Sr3Q2d+YPcYFZ/j42MOTnt/XUFs7ZNOlH/qH+V34eknjjGxhyemw2t8HLrLgcmPb45x+THzPv1j"
-              "Of7r8lfHPzmGF3bZ3FmtB0J4rjlifs7/R1nxHJOXPVOw11fR1fNMpa/qg/TZvsLXqIeO1dbx7OfHum/o4+oxV9ZrvlTiLvpG6rjq"
-              "Ul5zYtWH5TlOU6FrDq6/ea2bj28y01F9N77aQS5nvazxVadjjWl8M41iLUrWd/OrXrmY37zGfx6rb4Stlmc/HyOPktPLWhbWt4vx"
-              "zWvcHNgptq1WxjleGKu/YfNSMtbtW5DtSKSPie3hE+MxorYwPv3NfsxZgeF7V3U4zgfFXCQx+uRej3VfeNmBrUtlnZwv1zgL02sN"
-              "9+HLVF9bydNWt+kcTfGaH999F7eVC8/vzhVLNVavb+bad31YeXvZqv5+u9pxWiq+xkRM0bBD/FwnDK+12sP/F8X/p/d2PHnKyS3H"
-              "xxxw9Ov42Z8f3m5R/XlVj+ea8bPen+2A+/PTb+djJfRo67m2urjhwfSo4Xefc/WDK376OOFTK1s//JX8/lqPqXPtc93HZY6e/bC2"
-              "Mg6q9j198HaiMz1xcax9looPklhTcfn9wtKT+55z8Oc6cXgw4eeaKFz1+Fipc25Q1auk5xrAH/MdPee7s2Z8/iB1X8KV7WWDc1x/"
-              "zrV02H1/2Ofk+nLt8xr/dT12UdajTq9ynrZ15rrEPeYPIZ9ZPcqxRhlFPfQ1kRvdhd2TfbzazvcAqrqPo9m3jz0Z/9avAlePeY3r"
-              "y3T04lPfOX4+edA5fvKr7g+Ppbdjevn2sGbOz4ZzHa+3Y/7cv1jPcfjgOKc9P+erhzewx8fs63XGyadPvneN/1cfVP03J1P2xT9O"
-              "ZF99eI4Eve3z1Nnjqr+/dHyg5DXXnzqKLrMM2lp9GCr/cX3/Wu+CuKzkV1/j++BNYnxwrqbIh5786S31tq6PvvlABV/DPTy0Xt/H"
-              "muHRvk9ucMwwqzq/VrI7H4M4Fi95gnBo+pI9t+RxHO6vtQ+MRf/4O4xDf+2Fw1j0D35/yz/yce7dKPDwjoWqjp9rtZOVfvbZAw2m"
-              "L/EPnvml/veUe76k6Ys8LT/U/6IdT/4K93+IUP9LHemWL/KRoP6/dFR1jFun/yt9z/XKx0rgucY4PYFPFY9Kuu/zuXwdC3nSxiA8"
-              "L/mMYUHiSvcHvtzEQpFYkDoMf1BuYmGUWPi0Fbpe8uN2zxdM67UuOWagwOYva13i5/GH1iV+nr+8LvHz/ldbl/iF7vX/Um6vS/wy"
-              "3uv/Nd1cl1T6Ngf5AtEfj/k5+mtderbn1NhdG/h9M7Fw7TPY/oCG4ctYoCH0fAmMBXqew2hYsPwuPff0USzQcx9fw4K1TiQ3f5k7"
-              "kUfWiZXMcz954RzlsVLQ+y840f+f/YHOBxTodv9z7FL466wNKUifpMcBVDLx3tqQHnvRr/6Xc63uDyhuX+9/dlaErg3oMbdHf80F"
-              "XV8g+qOEL68NqKQfWidSmf5q60Qq2625gR7z9q11Io3h1txAk/uhdSJNy621AT3m6eNclK0Lnr7A9FdL/nr/L6M2BvH5YFlv979p"
-              "q9Xd6/8nJ9f639aR7/X/Fsz+l2dFhj/Y9ls8ITxjcar+OHfYjz0vHp+i84RAb/3xOAVMTjmzfvclgZ7xRnz/8nGy2u2P8OBtXPYR"
-              "SSP2ZGqZx7r2Q+Jzn/Gjb5KhYwX2fSqZ5xxg7/Wk6vv5s88+Y5jOffejJSw2yjwTqMp6nG1+tCg89zUPznfM9eHzzDqmC4fniWsV"
-              "18fL+tzn9p9j+xEl8Ty/+IiSeO4zfURJqPtM7z4xlPA+7pRzgOv7tcbVGb/A9nfba7jw9ME2Lo8Vash1zMz7eVTI1ZphMr9TY/nM"
-              "b1ajHfV3e78sNwDfOGPtU3/ngbIIs5ULQFkJ+CZjtnIFKGsEvplAW81AWQtoq10fR7wsT3U8XNX/lW5fx6SyMyEeh+KjHrPrSV8b"
-              "VrJKHPK7fBgA3d6QLXJdYsqTLh8R3dUZvZAvgHzUdSep244jS4Y8oltiRK4ZkLYXXXcuYJ+PunxBdE+GLNrnsy4/IroXu8/HAMiv"
-              "hu4C9vlmyC+A7t3u8wlouzPG+RSwPnfGOJ8AvDpjnE+LnM+FL+O/HeAr+W+PzR9qfkRVLhnYG3bbt9PanyfC0NfNv/HO8O0tGWBu"
-              "D431lfguGP0Rvve/B/sjAvVNuf/NFu19n+o7vU0EfO+xNcPWX+84Z+NbxAHw79wGlNtfr7gQoXa42F+X6nzufXy4FLrYF994LSfq"
-              "/Xvpdz1Q3wh8M0LYdWkCylqAbzasPxLQH3nA+iMDtsoEfBMwW2XA7hkYN7lgtsojUNYE2goYUxno57yCtgLGeQawUBJmqwLYqsyY"
-              "rQpgh7IC32yYrQpgh3EAvsmYrcYClIXtM7gR8B8jgL1xwWw1AnafAvANOH9MAI6nHbPVDPTh7IBvsHWJmwHfNwM+bQbH4JyBsgpo"
-              "K2A8zwD25hm0FTDmZwB7MzgPzsCYX8B5cAEwswBz5UKYrRZgfC0ArhYQVwuAqwXE1QLgagFwtYC4WgBcLQCuFhBXC4CrFcTVCuBq"
-              "BXC1grhaAVytAK5WEFcrgKsVxNUK4GoFcLWCuFoBXK0ArlYQVyuAqw3E1QbgagNwtYG42gBcbQCuNhBXG2CrHbTVDthqB2y1g7ba"
-              "AVvtAMfZwbXoDqxFd3AtugPjawfWoju4Ft2B8bUD68d9h2zlh/760Q8OspUfPFAWAd9g3NkPESgrAd9k0FYFKGsEbTUBZc3ANwto"
-              "qxUoawO+AXEFnMt6B+IKOJf1DsCVA3HlAFwBZ7fegbgCzm69A3HlAFwBe6HegbhyAK6A/VnvQFx5AFcexBWwL+o9gCsP4soDuPIA"
-              "rjyIKw/gyoO4IsAOFIBvImYrAuxAGfgG2xf1BIwJWkBbAWOCgDFBO2arAIyJ4IBvsHMcHwAshIDZKgBjIgBYCBm0FTAmwgh8M4G2"
-              "AnAVQFwFAFcBwFUAcRUBXEUAVxHEVQRwFUFcRQBXEcBVBHEVAVxFAFcRxFUEcBVBXEUAVxHAVQRxlQBcJQBXCcRVAnCVQFwB56Q+"
-              "AbhKIK4SgKsE4CqBuEoArhKIqwTgKgG4qs4/TVtlYD2QAXvmEbNVBtbaGTsf9MA5qc+APfMG2qq/n+QLME4LFlvrC7DWLljMhC/A"
-              "OrMA47SAuCoArgqAqwLiqgC4As+dPXDu7IFzZw+eO3vg3NkD585+BHE1ArgaQVyNAK5GAFcjiKsRwBVwru5HEFfAubofQVyNAK6A"
-              "c/VnbjdgKwBXE4CrCcTVBOBqAnEFxA74CcDVBOJqAnA1AbiaQFxNAK4mEFcTgKsJwNUE4gqIL/AzYKsZtBUQX+Bn0FZAfIGfgfXV"
-              "DK7bF2B8AXEDfgHX7Quwbl/AdTsQO+AXYN2+gOv2BcAMEDfgF3DdvgDr9gVctwOxA34BcLWAuFoBXAFxA34FcbUCuFpBXAGxA34F"
-              "cLWCuFoBXAFxA34FcbUCuFpBXAGxA34FcLWCuNoAXAFxA34DcbUBuNpAXAGxAx6Ip/cbiKsNwNUG4GoDcbUBuNpAXG0ArjYAVxuI"
-              "qx3oZyDmwe8LZisgJsA3YgLkvTj9dTQBMQE0OMhWBJz30xCAb7DYWgLO+2nIkK0IOO+nYQS+mUBbzUBZC/DNCtpqA8rC4pAJOO8n"
-              "54BvsDhkAs77CcjBJgfiCjjvJwfiCjjvJyBXmxyIK+C8nxyAKwfiCjjvJwfiCjjvJw/gCsy7I+C8nzyAKw/iCjjvJw/iCjjvJw/g"
-              "yoO48gCuPIArD+LKA7jyIK4IwBUBuCIQV0D8BAHxE+ddZpCtgPgJItBWQHwBAfEFFEBbAfEFFABbBSy2lkIGyiqgrYDxFSbgmxm0"
-              "FTC+gLgBChtoK2D9GLE4ZAJiBwjIg6aIxSFTBDADxA1QBHEVAVxFEFdA7ABFAFcRxFUEcAXEDZx3/WG2AnCVQFwBsQOUAFwlEFcJ"
-              "wBUQN3C+CwfZCsj7pwTiCogdICCfmxKIKyDvm4C4AQJzwwnIDScwN5wygCsgf5wyiKsM4ArIHz9ehMRsBcRPUAZxBeSZExATQAW0"
-              "FRATQEBMAIG54QTEBFDBYmsJOO+nAqy1ywLaChhfBVhrFyxmm4DzfhqxmG0CzvtpBNaPIxazTcB5P43AWhvMoyfgvJ/APHoCzvsJ"
-              "yKMnMI+egPN+GgFcjSCugPP+5/2yfVsB5/00AbiaQFwB5/00AbiaQFwB5/00gbgCzvtpAnA1gbgCzvsJuFOBJhBXwJ0KNIO4mgFc"
-              "AXcq0AziCrh7gWYAVzOIKyA2gmYQV0BsBM0ArmYQV0BMAAExAef90JCtgJgAWkBbAfcJEHBPAC0raCtgfAH3BNA6YLYCzvupcU+A"
-              "sBVw3k/APQG0YrlLBJz3E3BPAK0FtBWw1l4n0FbA+ALuCaAVxBVw3k/APQG0gbgCzvtpA3EFnPcTcE8AbSCugPN+2gBcbSCugPN+"
-              "2kBcAef9tAG42kBcAef9BNypQDuIK+BOBdpBXAHxBQTEF9AO4gq4e4F2AFc7iKsdwNUO4gq4e4F2AFc7iCvg7gUCYizCgOEqDA4o"
-              "C8NVAGIxAhCLEQYMVwGIxQhDBr4poK1GoKwJtNUMlLUA36ygrfq4CkCMRQDvug/AnQoBvOs+ALERwQH9XMVFmLYCYiMCEBMQ6ruj"
-              "ze8iUFbCbOUBOwDn+MFjd7EG4Iw++BX4ZgNtBfg+wvbbA3D+HgjAMWF7yAE4fw/AufrxuDlmKwJwTKC/Au4vCAT4KwL9FXB/QSAA"
-              "CwGcB4H4ghDAeRCILwhAfEEI4DwI3F8QgBiEEMB5EIhBCAHEFXB/QQBiEEIAcQXcXxCAGIQQQVwBMQghgrgC7i8IQAxCiCCugPsL"
-              "AhCDECKIKyAGIUQQV8D9BQGIQQgRxBVwf0EAYhDO96YgWwHnzgE8dw7AuXMAzp1DxnIBApAjH4Dz3ZCx+PYA3OsdMharFoCc9VAA"
-              "exYsVi0UYMwDZ9OhYHF9ATh3DqWAtgL6EDibDmUGbQWMZ+BsOoDnzmEE+nkEfTtwphyA/PEA5oYHIDc8AGfFYcRiawNwlhrAs9QA"
-              "nKUG4Cw1gGepAThLDUBecZhQWwH+Cry/PQBnjUE9a/TVW3T+kn17H8f4TvB2/gYXe4dExN9n8VvqYO9JCu5ddB2vss7vZ+ObF+c8"
-              "thar91Esmcfdjcf2aPU9338QbarjfdgbPs54E8cb7xXxOonvfUPHor8H5bW3i+p2hEY7njIuyvdxvPFWGy+r8Vu+KxO+/1V+D6nR"
-              "jvT9x39XOPaGrYR9wnmQLGTU97X421MCL/XbZ4P+bo/ADH8zbDTaMdvvYPnJwCVv+6y/OQjr2I12MB1iT0bDa/19aLyjOOj9wfdq"
-              "xJ2Stm3lu2RFf7dL1Gs03mf8/H6Ub2rS1sCu09+ZNH87sy9lO3Zd/rU/U9tt77y75t/fAA1et4+6j1J9z3Xz70Ow51qer8b3Tnib"
-              "LP8fRvsNN8s/iz0OAnR8rFFpOS76zAO3lZfvvgagvo89g+OYsXpnlOdN1X6X5wzw9r5+N/yK4OdRzCtSx6bLDwYWBHfm79hJG0hf"
-              "UpS3iTn2KzvwOvF4+uqNY7vPub5FeZPx3e7v74E++kzaCsDM466xeR/Adcz46vPlhBUm81z7LOD302t8hDc/w9clszfWiQYWRDxb"
-              "havZWMss1jqRdB0iTqrS8Soryf7kOvh9KeoYeh9Ppm9/xFBlF8bdv+KyWrq3Wvb1W7Zj7ffh4+6UHda9VvM5v3tF/V3ZfbXm9oKN"
-              "89V479Cao9R7MB7j1PRX/B0Mrm/V53knzlXlGlz4ElZHLiPfrKRuHziRH12tGSz8sbHixBy89eeuau3jxHkfdfmLE3lX3uwz6F1L"
-              "bneRM6Txs1z546HSsd4Yw435kY0nl1/j4wh/Ov+ZAJmPuh9hVS0+yPq/NN6vtXQ89v2WAZw/3PWG9DIEVGZ6rGumx7qmNwe7+n44"
-              "PtaS686pjsc0i3XbBo1zx2PP+BpgDX3dewTGoN2H/jGG9uc/XVv56vzc8zEo/JLeN/7BRWa5D9JeJ3p2duxJGweN+vI5n/WrF7n6"
-              "tn39rI/Nqx4k+SrzY17E3Nk6SPDXzcSP1j6iye4PALvEzn6FbUHsUl5V7F71aOgW+/sVrqjft8Tu8ePtbumWseez2vbrt43j8OBH"
-              "R8gy963p3VZsvgxsXyUwfqX/bui+9uGOsNXznxmQ+bDDES6F+dBwvTdxhJQvxz9r15cEwX2Wvo70Wl8d6eOJ8txfJ4YH/zhCtxt1"
-              "Et9fe69HPOM+bbHfDpGXxrAkYma82HfR9wD4uuQwvHjPy9if4+sHtxvcoCEj7hbJxhqH1Z3ovg4RWwPoELEJDR1CJvZ1cK6ehvs6"
-              "Mt1rh7gnHdWx3mtH+YKtxLks0I7xC7Yab/b5NGI6OMeegXaI7zdMB+fYy9TXIb5fvqBj7+vg/HMFx6CQWe61Ywu32+GG+VafO7G/"
-              "1tDB8O5ou9UOF8Jt7Lpwsx1hu+0TXdzvtSNhfc65pUtAn/M6pS+0Iw/3dOT0BR3TTR3350FX0r3+KPd9iXybHmjHF/yuG91NHeMX"
-              "dKz3bDV9wZfMw70xOPv7fT6ne7aapy/ouNnny3Bfx3KzP1Z/vz/WcFNHuq9ji/d07PfXPvLtXqA/9ny/P/b5lg75Fi2mQ75Ni+i4"
-              "76/k25v9/vDofM5lKN4a5/LtQ9BWdG8elO8KgjpCvKnj/jwo34kD+iN+oc/TPV8i35XCxqC/OZ/LN6JAW5V76xL5bhKq4978Id/j"
-              "AftjvLfelW+EgDrm8d4YnOf7tro5D8o3MEAdS7mpY7yvY723TpT37IP9sd8c5/t2ewzScG98yLvKMVvJe8QRHesXdGz3dLj5dn/I"
-              "u4r7/UEU7+sI7tYYlHfFgrYK+Z6twv1xLu9ABXSge32DvFvzVn+k8X5/5HJPR7m/z0A35w95Xx5oq3JzfIxfwNUY7umY7vtEeWcW"
-              "0B/zF8b5ku+NwS/MH4RwtcG6DwjUsd7E1Xp/TU3bPT4o7xzBdMj88347At2fP2SuLqAj3PftMi+1byuZMwrqiO6ejnjft4d0z7fL"
-              "XEBQR7nnS2TeFKhD9VfpPEzV48XFmXAVc8fj1T2LmRFY5LGDq1IusRjfxzme1LH268jvFuBx+qJ+u6ifGdfH7x+gQa8jPzckp7f7"
-              "LWY7KbHrR6wTz2vmsaec6wtZK5esiqHltuKxCvxuAW4rKkY7qvNaMR+weCHOIUU7FqNNs7Ct1EGKfFUv3h+8rWHQvw9VPg73ZYHF"
-              "DvH8ar5PwdePQl+0ccXtwN8SeLUvy7huEeM3GbqLncfCY3yET+TtWHQdr7P3Q3aucwG4rXejLDZOp9GIex9EObIdm9KOatzx/oxD"
-              "39/Eqs9pFW1U28dz9fkdAK/9p6NOfF80Wvd+HPXi91mJcnkdRz3m4fWNMj74ef8LP6f8KOqllzuaPkLqmHU/ESfTT1zf8BikGWzH"
-              "crMdGfNX/K6Al74KV3ysxLXvQ1OFK26f5Pr24eeZicWB8jPI+g2FpMmfftcbuRIMY0I22v3B1zgp9cdX0uJc3seW1FF0eZ5Pwe8t"
-              "5mOTc9lXOY/xKHXM37vjUZTF/z7reEuTjE+01iJ8D1ngYgHsWdsK8Fd8nSnwQ/p4SrPMXRJtnK95icfKcn38zDtp4/FRJ9mOSfed"
-              "6v0VVT9xffxOjOztdmRgDPJ3Fogwn8jfXbg75vnZ/6ucx7rJXDPwuzuyVtYpb+Tz8rs6cjU+ctH9II/xyiPQplnIXjoSi2msZRYj"
-              "37Eo5db1q9YleQHqqLWv9X2F3Tz1bc3PW4S+3WhHtU4sQ79eRYute58zru+rfLXi9brwGLoC2Iev80U7WjJZifFrfV8MHWcfbIbM"
-              "qMtHNrb5+lPITvZalMd2m/0/i7Le69QZ5/yOFG6rV7mtuq8i31D2OfcTzpDfjLIWk9tJHbuOjVe5Nd647h1bw/G4HgQ/oxZT2mkH"
-              "3/vl+kYP6EuGvs3uc37Xy/iWz9nuc34HzFi3I/T7nMc9ibIyaCuGcWG3Eaj7bOZvyHFu1X3RyxonHW88jmxcMH81bjfxtt/3iZMz"
-              "MaN/74Ws7A8AM/zuHX7vzzSY/k3omKyyfH8PiN/Vw201BdnnZt2T4s8r327hpX4rhZc1RaDuRcfFlG0exWMEp9LHD39bpYE32Y4Z"
-              "8nHX94uuj+fDtPaveGwFhNdNlxV59K0+37+/z2PgnDZX+6K8rGnr24rfvcTtNg92n/M9r9nYh+V5IfzNFj4nVvvo5j41j9+cI6Av"
-              "6z7RT7a/EvqKUlZL3yjyIfQ7a1r6JqWslr7Z7g9I3yLKuvZnB3EngrzXYDX6oxjtMM48eC7HvNr7DKK9u4Gfvd/WpRof89637+IM"
-              "/Nj6ZG6fV8pq6SM9nwY9x1mCUlZLX9TzcfyOjQ/+ZtASTfxc32S7P4StgqKjxs+mlFt9s1QcZzE4Ns/hWYw1PM/ZeZ3RKz6R5+q8"
-              "Yqir/ajX+zrVHs7KzlX4WxVrNZ+vRb/PSOgw9thXa4+jOmPh7+is/JzE6Xtk/D0dLsvP2PaqP4SMbK9edwMLPNdpDdUeGbfJapS7"
-              "Gnbn93MMxhlkpeMV/1fp2Jxp9+sbmb8lfKJld/42D5ev7K5+v9bY3Q37bP3zSP5mz9Y4H+R3l/M3fJDzyK0Y+rLtr/j+EH/npyD9"
-              "Mdn9wfemhMysyydE32L4kpa+Vciruf3cH9dnLPz9IFF3vt4dDHvuum23DesPns/xOocpch9VfO/FPqoeM1HVi9+Rs7M+4OdDHMc8"
-              "Fle8H5VlHi4/t+ZvFHF5UV/tnonyfibMY5r5eYTQEYC79Lw9R/FYrj3quBT1SEqeaGf+4Gce69Jfi3B/w9eGe8bWPtwH76U/1nZj"
-              "fgv1nTW8jrO+/tiBtTZ/m2mfK18SDZnVaN+ic1HRZ1Wf71q5rT7flZzoin8u1X1LHItcft/M9dm77HudpA6nrNvsdjg+7l7YzdLH"
-              "vOkgfUyx+EReDzf47rryLNP0iaK+QVlztr6Pon3CXw3GvVzWfZ1er8elQ/ElbF18lVuviQZjTTRAvsQNhi/h85KoO/+tnVlq6/ZF"
-              "kUfXj7vxfbHPa9e+j3L8nS+xFhgatpp0+artGl+5ZN/5it2ODGB0UcZ8b5yvN8e5xtVKZ5zvxjiY1brzOl36pD3POxF0HXb8hONv"
-              "lIHxE0IHux/d8Ts+jfgJx+4T4rJ1vJfUkbpxC7Jc5itdUsfN+Q0SX+LEXeD34kucq/rcsX28uRj2GYX8+5mDHB9n+6zxcbXdji9x"
-              "TrfhwOL0zzrJdkSg7fP3O3GAzi2Vjlk/d5iyIb8abVrsNZy4L3JX7hZJgr/wOyEdv7tR6F6rdhhxmly390a5m1K/R6yptRZ17L55"
-              "Xq64z86IVXX87r63+/QdIB8N3V7fn6vvmvRWO4KqY7D8ILsr1Il76B1bf9YxTL7LExyPb+cx0+CevmN38V1ltfTNImby7p6+Y7kE"
-              "V1l2XL+r3x/0vC7r93u6d1GuGZfBZWgw6r7rHEDIOmFngSsy+L2Q9/35mOcqhNGIYWn0J5F+H5HXz9LP72U7AIxSMDCKnRs4lk96"
-              "ldXSl/S4XvDcwJFWVgOj/E2BCp/6GwoNjLIY46tcmxM7qnGVlbJaGOXtiKJcjk/bVguA0bl/32tjn8ExW0mM7gZGV6V+7bNtR7ui"
-              "w47/dmEw40CR2A/Hyr3Kss+jHdsndvWdy8F1YwEdy5e+yqrtJr832yG+i1DezfV9Mt6CsPe5Hct94fquslp2ru/ALt28GxdGQ3f5"
-              "buXcXDqKzI/hayqWayN1jND+pXgHS/RBUHQ0uCHL2blk8/veq7DjasgvnbrXda34YFj7/pzZU9xN15jzhQ6+Xg5736fyOaPwvw+Y"
-              "v4reXJN1/T+LbXIid6nhw1leEa/7VVZjjRFj4w2eWdXR8uG6Par+4Od11jojyjr2dVT8XOAEmHeZL3AxmxiRuBrVmLSrrFZ9J3NN"
-              "BK3b46yU1cIIG7Ox4s6vslo4WfvzPM/5+spaVMxXW3+er87uXAR8SXK630wD5kuSV8qq68X8VfLds2KXovGGQmMeTenWWbFL1fhg"
-              "7+i4BMyjqSh98z6HSh2j0K+VpeeuNubQNDV0jLfPAbX7RaWO+js2jtLa9ys8N8vt5n47v3v0kmmUm71yb2nHX7HcHsfyqBzfZ7D8"
-              "B8s9krJkn7EI+dg9Y+Gx4Jc+xVYsH+wqt2WroozNnq3G+p2PqqwKF5nrGzFfkmelD1vtWJR7Z3s6VqWODT8v3mR26n0HZ72lDl6v"
-              "1bDPpOho+JsyGPN5g5MV/dzAFQfFUzsW+36V1eBkRdb3vZzU5s7FGBPcz5dg2HMX5UBrhjIq8o11MMtpOmWlraY+lgqwN1BmYM3Q"
-              "0rH28Vqy9j5OVcfKvkXTUX+zfbdiKaWO/Xsv5lLcdRwM/8HXR6Ov9n3YmEr6fSKO5em40Xdj6F2VV8Tlr/zRxhgeo7IP184xcSwP"
-              "yo1aWbXd2Fw0Jswnjtrd2o1xwPKjuKw4H3yboyZFvjE2x0mpU68d8812LLq+sYFdlid2ybf6XOubjt/l+UCNPOzrPu0BysE29zJY"
-              "3pWbgL23id/9vYtyJD8nQ550+0zGWpTFup+y0D4cz6/aYp8/TF/Yh2PnnFzfVVbDX03F8Fd2PKVjOUqO5WC5yfaPQgfPjwLiKd1k"
-              "zVerqJOMI2PzPs+jMuIp3bQq9nyPpZTtsOQXKJ5S5VHT3tCxfZ1HTcHQ0diPnJ0iX5XL7sO/vu+M85mUMdWY71g+lpCdg80HZ6/I"
-              "N/zjnBXZXjuKIhNZnm/l5+fR0Fca7dDkG/MVu1/yku2cq82L8u5CY75iuVVS3yL326214bz115/Ge3UyF7m21aToaNiK5U1dsspc"
-              "y94+cDw/ikajXH4+PClvKCg6WM7YJd8YmwspY7CzLlmC8v6DHZvrWN6V0LcEDFdL0vVZMSFLVnXLPJaWfDHkgXiUpeJRQt6OSbm+"
-              "n4x2lIaOZN5PeH2jvZtT+0r+fRUbxeUXY0+f750tQKzaUmM3ATK7wuEaPmat5lr2RvNVVrJ9zOp0H8NixaSOyibsPtyrrMZ4XLXx"
-              "qIxz9sbJJdMqN5rl8jdQpI4IlJsh/3F9X60Tl7XvP9ZR17cae3Vr5a+sHEChY1Ledml9X+2Rlc3MGbhkFiH/rvt9/0G2A4gLXtd+"
-              "f4jvax3GmBIyu67Pypur45C3QXkzqmE39saAkF13aE/GWbmIHJcsl9AtKzYPbqTs7zT22FkekpDdfIOfD4p8gyc28hKte1LdzbxE"
-              "txVV31WOMp+L953H77d4IsvTE7LbBOXdOZEnCPDEbYXy7ni9BE/clj5P3DZhTyTvzm27Ib/+UN6d2y0d+w/l3fH3ri4dDV/E8gcv"
-              "2con7rI/LpkGJ9vDPZ64V+N8194Xr+tFQr5fp8on7gTIjIq+Bk+s8s8dj9PfR6MdWch3/eZerRP3DMis93hildvnWG7hVVaDJ+5A"
-              "3stuvRXfiPneZ0WH3W4/VH53188K+NtnfvBdnuhF/l71/rkRp8XfZLvk7bHpeX7c7qDzKM9y9TzPBTDWeV7IVm/eDxGwb9b1GVzN"
-              "D6XSkW7lLniWb+bVHMN23oRnnF7K93miZ2/RvrdjNHTkLk/0PP+r4olyHuQyqyp/1dHmiZdsew/As9w1xMd4N5g80dThnKrvKsvm"
-              "id41cvUZV7x01ONxU8pqjEdHBh9syQTlbUk7b9a7VuxgFHV511FzMi/KRfKjvEvK+5yt9mWzfbaO0o1b4fW4dLS581Vuq76TUt8W"
-              "pudqnG99n+oWVZ93xtxT5d15twDtWJU3NVvfb7e5s3e7kH/X3ebOl3yjXnytvTvge1fpGLvc2bMcNa7PewdxZ89z1ADu7Nn6kcte"
-              "9Whz50u+gUvuC4YN4s6e590B3Nmzc2Aue+luc+dL3ubOnufagdzZ++kWd/Zszcn1+dadgJHXcbnFnb3fVVnvsTtrPH93B+DOnhzE"
-              "nXm9OHe+9Nnc2fO3Ov0McWfPYrCFPLkf4s6e5b5JHfRD3Jm/NXzpaPgiSso7xZVvJzmfXzI25/RUbnFnT9UcRbyOk1GvLOT7dVor"
-              "HRmQ0fTZ3NlXOVielXuVVbdjEfJdv1nlmHhaABl/izv7INeJnsXcXGXZ3NmH0OXOtQ6EO/M3qC8drXbnqh2DUa6U6XJnkfNVceeQ"
-              "DB1RkW+MzTAaY7DV3knR11jnhVnok+2YAPsuuj6L+4ZqDIb5HncO23ddFuTOLO5FygPcOQ6NdmyGjqXPnXluFsqdWS4Zl7/q2ODO"
-              "0WPcOYbvt3wMe7MJ5s7R0Pcqq8Gd+bsyLe4cjfHIcrN87N/P42O5z52jHMNd7hwnjDtHTUeDO8cJ4848fwzhznEx22frWPvcOc6K"
-              "jg53jitQ312pbwPTaah0UN+nJqfrS8bcU8Un+gRwyOSFfP97us+d2TraszyoS3eHOycAPyzfzOwP8X3FB+PW584sx0zoSwnjzjzH"
-              "DeHOLN+My1716HDnNAK4nBQ/1uHO7O0ziDvzOYPJ+jRh3Dn13+f0/F4ClDvzPAaEO+dB1efTjnFnnteGcGeWg8dlT74KcWf+1hbC"
-              "nXPAuDN/U41zZ/72lcWdWZ7eaU+IO+dkyIcf484s707qSD/GndOq6Gj4oszHub6f6HPlS4C30zzP/xutcifxPXK3iM+rIt/6XuoT"
-              "MZAW/2X5Z1KfwedYjqDPWI67Z/7KZ2BdWiT3Re6U9SxnQ+grAPctAbo7geuAuC/zN1JHq+1Zka/L1b6P728cinKLGmN8lVXriIps"
-              "Zy3K8hJ9LkA/T4o+5a0toWPW9RWA+7I8Rl8iFCPsWV4i1w1x33p9VeZbMcaerzGKzX1NzsnndtGOzdCxQO+f+9HdijH27A03LnvV"
-              "T8ujXxT5Rt+OAfIxsh3xVoyxHw19Y4TyhP2YuzHGl45qPLKczbMcJB/H83xHhPuOozEPNvgvfz/O4r6jpqMd63yV26ovxn1lny+K"
-              "j2q1D+C+42zoeOe/7+W22rcb/dEYB9OgYKbBfScn9Il2TMb8w3IfL/lGOyYvZCHs8lxLhPuyfDU/VXvhk+/mfV/yrTpFrD+ETFLs"
-              "1uC+LDfz1CfbkYA63uS+U7WHPGl1qe22C/k+Jqv99pEAmZvcd1qqdsxCfy9X308A953q9yb6+bl+usl9q/fu/LQpZTW46IxxX6GD"
-              "5UhyeT97QF8wua/Jz+fYzc/ldRLcdw6C+wodvK9madMu92X5lVK23gu/l5/r52LoyEa+Gpaf66dV0dHwC3M1BieDp7KcUz8DnFPk"
-              "gq7Qu69+3lR5P1t1moUsxJ2XQZFvfe/E9xB3ZnmbQt9ixP6xnM1TFprPl6DIt76P97nzYuh7ldXgzkvGuDN/Uw/hzix/VOpotX1S"
-              "5OtyR+X7DndeZp07L6OhoyiyHe68LMoYbLV1VfR1uPOy6fqWFdC3C30Qd14HVTfEndcqZmLZ7nFnziWELMidWX6maAfLE5U6dow7"
-              "r+Eed2b5nFz2ql+HO6/AmdmaIR8j21HucWeW2yn0vcrpcOd16nPn1RiPqywHWreLvE2AO69y/ELceV373HmdFR0d7rwC3HLd7nNn"
-              "lg96+ahG+7ahz52rvFS/7n3uvPVzzDzL85T90RgHGymYaXDnLQh9oh2bMf+wHFe/AZyT5dadshB2ea4mwp1ZXugpK9sR+9x5A85e"
-              "toL1h5AZFbs1uDN7l9JvFXY3IF6d558i3Ll615LLX3VpcOcNOAvZqrilNQEy2z3uvFX7Ptsm9He587aL95Vef9+9wXHk+0qe8zv2"
-              "duYlL99T8VbMfn0+yN+TRLi6eMfI5upSB7Mj0+et9yc5D+Y5mBVXN7mzsAO/Mw3RNwqubt69I2SmPlfnb92IvqzGuXVWzfIrL3s2"
-              "uDrLC/V7tfcq6nuTq++roaNel9y7S8uznGHfeKNStmNX5Oty+e+9y3GpijVA4ryJ5ZwSaysZbaVqL4MGAuoVhXz/+1TpGLpx3sRy"
-              "RqW+ZLQjVDr6uYjE8jFpCMD3k3FHo72OJpYPKvXZ97jKdvTvcuU6EK5OVV7qpaPV9l3I6+Vu4nvBOY04b3KDytXJrPsqZJF1CfH8"
-              "0b1/bxixnNFTn9yT2QwdpOoj5wF9NXbXLl8m9q4h193i6kKHS4a8A3RnQ9ZXcUt6nDe5YrTD0tG4j0yUO97i6sTyLrksuQLdQ3/J"
-              "t/p2MX2MxZ2JvyEIcHVieZdCn3h/0I7zJrd3ufqloxqPVe4rAfmcxPM5Aa5OdT7nvnW5LHnf5eq8HlKHHed9lduqL5lc3drrI763"
-              "DbXPvtdf9Aery6XD5upXua32ZaM/GuPAF4GZrj/1Y9WOrJRVYdEnId9vx1TpSIDMfIurk18qHbPQ3+Pq5BegTivWH0JGs5vN1cnv"
-              "VTtWpayGPsLuFhM6WA4olyfrXRrG1S/Z9r4osZzTC5cNHBN2t5jUEVT5S7fN1YkCxJ2J0i3uTJRvc2ci3p9JKcvmskTjbe5M7P1C"
-              "Lk80AfqW29yZaO1yZ14nzp1PfQh3JvG7dLkz0S5kZX+sX+bOFCwd+w9xZ2JvWVIYIO5MApf6/iWx/Njr+wbnDOE+d2ZxHRT43606"
-              "UdWOBNSrCPn+99U8GPr3ixHLUZX6RqMdudIBrGtZXioFgGtX+ZwQdw6boW/FuHPo3y/GdUDcuXpH8dLRaDvLJaWg3+9CjGtR/f6g"
-              "xZ0j6dw5OkPHIGQh7hyDMgZbbY1CH8SdY9L1xQjoq7Ab+2fVFHXdMHdmOadSHuDOcTJkQe7M8jZlO0ZDR8a4c1zucWeWY8plz/pB"
-              "3DmuQN/upo8xuXMa7nHn5HR9Ys3Q4M7J97lzssZjNZ8ngFvy9/IQ7lzF3F1juMEtU+xzZ1YPqaPBnRPALVO6z51Z/inWvoJx55QU"
-              "HQ3unArQvsnoj8Y4SLPATNefpopzslzWq6wKiyynlhLAOdNa6QD4dtrucedUcc60Cf1d7pyAvag8YP0hZJxitwZ3zjLWgFi+7FVW"
-              "Sx/d584sB5TLU/Z97pwDxp1zVHDZwHFO97kzy0Xl8pfuBnfOGePOebzHnfN0nzuznFOujzLAZfNynztnXZ7yCujb73PnMvS5M3/j"
-              "knPnOi/V4s4MJ5c9G9yZ5aVSddeLrO9N7szySqUO/2PcOWs6OtyZ+Rwy3kgl9l7m9X2Dc5Z8nzuz3E5iObFUrDpV46OMQL1mId//"
-              "vpoH+XrQ4s4s71LqW4x2VPN5Ada13NcCebA0Dve5M8vbFPrGAePOo+9z59Hd485VrDMBeaLEcj6pGOWyvjy/h7jzmHTuPAZDBwlZ"
-              "iDuPWRmDrbYWoQ/iziwHVOgD3r6kscIuzz+0+Os4q7ph7szyOaU8wJ1ZbqeUBbnzuBntWAwdE8ad+duUCHeedFkaN4w7T/33fGjy"
-              "po8xubPI4QS4M8vhFPpEPmeDO0+xz52NdwlpqubzCeCWU7rHnadqb+k1hhvccip97jwlQ0eDO08At5zG+9yZvfWJtW/GuDOrC1n5"
-              "nJw7TzPQvtXoj9Y4kJjp+tPqfU5ieXtXWTUWFyHfbUeVM0oTwLd5nijCneeKczJ5st4Z49x5BsbHTFh/CJmg2K3Bnat8TmJ5pjQj"
-              "+tJ97sxyPbk8zbHPneeMcee5KLhs4Ji/LYpyZ/ZeJpe/dDe4s5VLWnNnlg8KcWfx7ifInWeOy0Upq8Fl+bubKHdenCpPy9DXx98G"
-              "RbnzQn3uvDidO9d5qRZ3Znmilz0b3JnlpZ6yoj8W+jp3ZnmlUkf8Me7Mco5pwe4dJOEnjH1R9tbn9X2Dcy7Tfe7McjuJ5cTSYtWp"
-              "OhNeFqBeUr7/fTUPLmOfO6+DoW832lHN5yuwruVrIiAPlla6z535uoTre+VwdrjzGvvcmemAuHOVX0tAniixnE9ajTMolttJa8G4"
-              "8zrq3HnNhg4pC3HndVLGYKuts9AHcWeWAyr0rUAc2FpjN/X567qpumHuzPI5pTzAnVlup5QFuTPLg5Tt2A0dK8ad+fueCHdmOZ9c"
-              "ljaHceetf5cNbdH0MSZ3FjmcAHdmOZxCn8jnbHDnrfS582aMx62azzeAW/L3PRHuvFV7S68x3OCW29znzqweUkeDO28At9yW+9x5"
-              "W7/fa9+GcedtUXQ0uPMGxN/ug9EfjXHAcjtpC33uvFeck69Td2P+YW+Z0g7gaq845wbwbf5OKMKd94pzMnkycvsEd96BvajqLVOz"
-              "P4RMVuzW4M7VW6a0J6Wslr7xPndm+ZxcnvbS586Nd02ljlnBZQvHy33uzHJLuTwZb4MK7vySPfOgR5Effemoc6SBs5DdyhMvjXbs"
-              "ytqSl9VqB3a3SGBc7ZK3cRUGay9rM3EVGM/k8pduezxesr120M12BGN8tNoRVflLtz0+whAhXhsGbc+r1Y6s2K2noxh9GA0do6rv"
-              "KueUJXOuDYxn8PZd5SZz3g3DbN/fLvpgAsoy8nHdLvSZ6xLRn/23awLLd73Wse3728OwqfL8d39/5eiPUNuK99uurq+H0OdOwQ2i"
-              "HLHe5fyDt4nl1Ap59XflE2vsOq/byvVjsYLT4i872HVJlQ8uAvqy8R6LvX4JTpe/9BUb326E7ocTNhTtKwI/KnbcZN5/Nfipy2WD"
-              "m0V93zH9ft9SYLm+gecfmnVcdHz7HXoHK7AcXllHfR3M9V2ynTHodI7r0gDYcG/0uTfquCnyDRvyPN8qJhXyE94pZdmcOng5BqW8"
-              "B+obOj5NwRWTCZ6ANrG5Oe7Cf5jrEp/VNdxVVtVPjC8Hj51HBZafG3wE2jEq37/bVuqYvj5ncN/DfUTj7bPAzk+k/ALoY2Mr79C9"
-              "nIG9nRrYm65XWfa9nIEGzO/y91nVfeOWDtfQsRl9u4o6qnscQoeH3lcTeCPXxzFhb+oFll8L4ZiCiWPT77Icx9s4piTKQe65CyxX"
-              "1+W97wfZvv0pK8bgK+e0hZOpe37BdQyhnj8QLFp7fZveN1T5q1cdW1hcuvuJAi9kr9slFgH/ocoq8wetikyjXJa3e80fHd/OfDKE"
-              "H3Zez2Vr7JhjMFAfP0yH7sdyR0fo3lXJbXXVqerXKt85AG/eBpYnPHikz+oxuPfHRyj98cHrMVS4Cvref2Bv5AbgjdzAcolP7gr5"
-              "qzAr+ux948Bye099sh2z0Y5RkW+1w3pHsSWzK/qqtRr/Pg5Cn2zHbrRjVeQbdWK5xHA7WJ6wbIfBH1kObohyPr/KqtrBeMYl36pT"
-              "NHhtSyYp+uzzltB6v5b78xgVHfZ5S2i8ZSttde89nxBHBRfv7ZM6pr4fjJoO+7wsxAnsD845CWjfKvRhOrQ+aOxfxL3R57Nad16v"
-              "S1+N71nRoawTuQ6eG8w4XEj9eL/A8mvPcsx1Cct3vmQaHJfFhzk+h/oJ8+0sN/gqyz6nDilhe68pAnXPRt13jBuwvN+rrFbdR2OP"
-              "VJ6fX+Xad/YGloPLbRJ4/ujM8wqr+YPxDFnWrN7lG5J2f7+8xzdUezKBvc95yctzqmDk3XIcXuu5x/mX1GGV2z/DDtm+N87ce+Vv"
-              "y/LxwWzt+H47e8OV6zvLEeNjlH11fUdKWcf3PC9AfB+ErBjnvD/Vt1er/hRlRUX2YXPRHxnYg2Y5uJCfz/U77gGw+6jqC/xdyrEx"
-              "PvKklCXPX2s7vP/9mGvFndK1jlnv58T7c/retS33C7keg8Pll6bRkGHjVNRpMeMIpY5dKavVn9o82Fn75L2PGd6mwuexHYqzDMLX"
-              "GjyzDB2e+X7mJHUwf8D06b8b65JCjXXJptua2fCqRx3bRoqOzjxY+F7G2t9HKdncR5G2YuUa79QGlot8ldvCRd0fAD8vo9K+1veT"
-              "MT4a/LzMAPamH9sjK0t/D6AU0W5pK4M78z2nAuxl8TNrqu5DttZq4/D1PdJRjo8AvIkQRq/Xd3QmvqUO6vMoHlMyGmdkLH881Dm8"
-              "pq1+YD95rNsBzDksT/iq73sc0fV9NQZHrayqfXwc8Hmb86BxxPzVqJXVwsIi6s7LgTgOf0OWVkDfJnRLW639cT7276njOmxfUmGR"
-              "5WlcOhrz/DSIecV+t4/N1ZMz41N0HV7ICltN7kZ8SqP/WB7zaQMovoTlMgt59Xdp78lYec3cb0+DYZOAnaXyXOa78RPszVpZ18He"
-              "Z5g0+YZP4+/aVvETyFt0ga19dXvW9StCFvK70/T1+IlpbvS5MTcwfcHKdxZjazHiZFrjaxXy2u96bOmxH622b6o+NI8lsDd2pXw/"
-              "jyXMgyGL5bEElgct27GrOlo8yvGYtFe57uCQ6/Wb2N4Qv6N50O8feX9blsdNZxXHwzCqvHYYOMZm05fIeSmbMles4wB9L3S4YMis"
-              "hk1WpX3tOJlh2A15fX6U7cbOUgfnFPlGO5xXvn8/e5U6WBu5Pqf7FdEfjsB2JKhe1/e8/9k3LkFruIHFJA6uv54feMyc0G2/zSEw"
-              "5kagbyZFtteO2WiHZbfF0DdXuQCbIvPwH7/6f//hV/8fr4t8lA=="
-          )
+          # carbon-gsr2 (3rd round, reverted): an earlier build replaced the upscale shader with a HUD-smoothing one and added a
+          # debug cvar. Victorgbd's original shader is used as it is: put it back (and take the cvar out) where it was installed.
           hdr = APP + "/shaders/nfsmw_sgsr2_escalar_ps.h"
-          if "HUD smooth upscale" not in rd(hdr):
-              import base64, zlib
-              wr(hdr, zlib.decompress(base64.b64decode("".join(ESC_HEADER_B64.split()))).decode())
-              print("gsr2 upscale shader replaced (HUD smooth upscale)")
+          if "HUD smooth upscale" in rd(hdr):
+              shutil.copyfile(MW + "/app/src/shaders/nfsmw_sgsr2_escalar_ps.h", hdr)
+              print("gsr2 original upscale shader restored")
           s = rd(g)
-          if "nfsmw_gsr2_depurar" not in s:
-              s = once(s, "namespace rex::kernel::xboxkrnl {\nextern uint32_t (*g_nfsmw_secuencia_swap)();",
-                       "REXCVAR_DEFINE_INT32(nfsmw_gsr2_depurar, 0, \"NFSMW\",\n"
+          if "nfsmw_gsr2_depurar" in s:
+              s = once(s, "REXCVAR_DEFINE_INT32(nfsmw_gsr2_depurar, 0, \"NFSMW\",\n"
                        "                     \"Snapdragon GSR 2, depuracion: 1 = el HUD detectado en rojo, 2 = el fotograma del juego sin GSR 2 \"\n"
-                       "                     \"(solo ampliado). 0 = normal\");\n\n"
-                       "namespace rex::kernel::xboxkrnl {\nextern uint32_t (*g_nfsmw_secuencia_swap)();", "depurar cvar")
-              s = once(s, "    p.escena_rb = e.escena_rb ? 1.0f : 0.0f;\n",
-                       "    p.escena_rb = e.escena_rb ? 1.0f : 0.0f;\n"
-                       "    p.relleno1 = float(REXCVAR_GET(nfsmw_gsr2_depurar));  // carbon-gsr2: the upscale shader's debug view\n", "depurar use")
+                       "                     \"(solo ampliado). 0 = normal\");\n\n", "", "depurar cvar out")
+              s = once(s, "    p.relleno1 = float(REXCVAR_GET(nfsmw_gsr2_depurar));  // carbon-gsr2: the upscale shader's debug view\n", "", "depurar use out")
               wr(g, s)
-              print("gsr2 debug cvar added")
+              print("gsr2 debug cvar removed")
 
           # ---------------------------------------------------------------- 2. SDK
           p = SDK + "/src/kernel/xboxkrnl/xboxkrnl_video.cpp"
@@ -1313,7 +1108,7 @@ jobs:
               GsrAnotarTramo(con_z ? 'S' : (opaco ? 'O' : 'H'), con_z ? 0 : huella, con_z || !p.vs ? 0 : uint32_t(p.vs->huella));
               if (!hud) {
                 gsr_vio_escena_ = true;
-                gsr_sucio_ = true;  // the render target has scene draws that the last copy does not have
+                gsr_sucio_ = gsr_necesita_copia_;  // the render target has scene draws that the last copy does not have
                 ++gsr_n_escena_;
                 return;
               }
@@ -1348,7 +1143,7 @@ jobs:
               }
               ++gsr_fotogramas_;
               static int fallos_anotados = 0;
-              if (gsr_fotogramas_ <= 6 || gsr_fotogramas_ % 300 == 0 || (!gsr_snap_valida_ && fallos_anotados++ < 20)) {
+              if (gsr_fotogramas_ <= 6 || gsr_fotogramas_ % 300 == 0 || (gsr_necesita_copia_ && !gsr_snap_valida_ && fallos_anotados++ < 20)) {
                 GsrAnotarTramo(0, 0);  // closes the last run
                 REXLOG_INFO("[gsr2] dibujos al RT frontal (fotograma {}): {} de escena (S con profundidad, O opacos), {} de HUD (H sin "
                             "profundidad y con mezcla), {} cortes, {} copias de la escena previa al HUD ({}), {} saltadas, {} destinos restaurados antes de copiar; "
@@ -1443,36 +1238,39 @@ jobs:
               e.rect_profundidad[3] = float(frontal.y1);
               // A frame with HUD draws only (a 2D menu page) has no 3D to accumulate: it is upscaled without history.
               e.solo_2d = !gsr_vio_escena_ && gsr_n_hud_ > 0;
-              // The composited scene before the HUD: our own copy (GsrInstantanea), or as Most Wanted does it: the last earlier
-              // resolve of the same render target, the same size, to another texture.
+              // The composited scene before the HUD, as Most Wanted does it: the last earlier resolve of the same render target
+              // (same EDRAM base and pitch; Carbon names it with another format, 30780 vs C0780), the same size, to another
+              // texture. If the game made none, our own copy (GsrInstantanea, enabled from the next frame on).
               bool con_escena = false;
               bool escena_laxa = false;  // true: our own copy
-              if (gsr_snap_valida_ && imagen_color) {
-                const auto its = resueltas_.find(kClaveInstantaneaGsr);
-                if (its != resueltas_.end() && its->second.imagen.preparada && its->second.imagen.ancho == imagen_color->ancho &&
-                    its->second.imagen.alto == imagen_color->alto && its->second.imagen.formato == imagen_color->formato) {
-                  e.escena = its->second.imagen.vista;
-                  e.escena_rb = false;  // the same render target's data, in the same order as the color
-                  con_escena = true;
-                  escena_laxa = true;
+              const uint64_t clave_rt = frontal.origen & ~(uint64_t(0xF) << 16);
+              for (size_t i = f; i-- > 0;) {
+                const ResolucionFotograma& r = resoluciones_fotograma_[i];
+                if ((r.origen & ~(uint64_t(0xF) << 16)) != clave_rt || r.destino == base || r.ancho != frontal.ancho ||
+                    r.alto != frontal.alto) {
+                  continue;
                 }
+                const auto it = resueltas_.find(r.destino);
+                if (it != resueltas_.end() && it->second.imagen.preparada && it->second.imagen.ancho == frontal.ancho &&
+                    it->second.imagen.alto == frontal.alto) {
+                  e.escena = it->second.imagen.vista;
+                  e.escena_rb = it->second.intercambio_rb != (desde_destino ? false : frontal.intercambio_rb);
+                  con_escena = true;
+                }
+                break;
               }
-              for (int pasada = 0; pasada < 1 && !con_escena; ++pasada) {
-                for (size_t i = f; i-- > 0;) {
-                  const ResolucionFotograma& r = resoluciones_fotograma_[i];
-                  if ((pasada == 0 && r.origen != frontal.origen) || r.destino == base || r.ancho != frontal.ancho ||
-                      r.alto != frontal.alto) {
-                    continue;
-                  }
-                  const auto it = resueltas_.find(r.destino);
-                  if (it != resueltas_.end() && it->second.imagen.preparada && it->second.imagen.ancho == frontal.ancho &&
-                      it->second.imagen.alto == frontal.alto) {
-                    e.escena = it->second.imagen.vista;
-                    e.escena_rb = it->second.intercambio_rb != (desde_destino ? false : frontal.intercambio_rb);
+              if (!con_escena && imagen_color) {
+                gsr_necesita_copia_ = true;
+                if (gsr_snap_valida_) {
+                  const auto its = resueltas_.find(kClaveInstantaneaGsr);
+                  if (its != resueltas_.end() && its->second.imagen.preparada && its->second.imagen.ancho == imagen_color->ancho &&
+                      its->second.imagen.alto == imagen_color->alto && its->second.imagen.formato == imagen_color->formato) {
+                    e.escena = its->second.imagen.vista;
+                    // the render target's data in its own order; the color is the front resolve's
+                    e.escena_rb = desde_destino ? false : frontal.intercambio_rb;
                     con_escena = true;
-                    escena_laxa = false;
+                    escena_laxa = true;
                   }
-                  break;
                 }
               }
               if (avisos_gsr2_ < 3) {  // what was found, for the first frames (to tune it on the device)
@@ -1595,7 +1393,7 @@ jobs:
                        "  uint32_t gsr_ancho_ = 0, gsr_alto_ = 0;\n"
                        "  int32_t gsr_dx_ = 0, gsr_dy_ = 0;\n"
                        "  int32_t gsr_rect_[4] = {};\n"
-                       "  bool gsr_vio_escena_ = false, gsr_sucio_ = false, gsr_snap_valida_ = false;\n"
+                       "  bool gsr_vio_escena_ = false, gsr_sucio_ = false, gsr_snap_valida_ = false, gsr_necesita_copia_ = false;\n"
                        "  uint32_t gsr_snaps_ = 0, gsr_n_escena_ = 0, gsr_n_hud_ = 0, gsr_cortes_ = 0, gsr_saltadas_ = 0;\n"
                        "  uint32_t gsr_restauradas_ = 0;\n"
                        "  uint32_t gsr_cuenta_tramo_ = 0;\n"
@@ -1605,20 +1403,6 @@ jobs:
                        "  uint32_t gsr_fotogramas_ = 0;\n", "members")
               wr(p, s)
               print("patched nfsmw_nativo_destinos.cpp")
-
-          # carbon-gsr2 (4th round): debug view 4 = the copy of the scene before the HUD, shown instead of the frame.
-          p4 = APP + "/nfsmw_nativo_destinos.cpp"
-          s4 = rd(p4)
-          if "nfsmw_gsr2_depurar" not in s4:
-              s4 = once(s4, "REXCVAR_DECLARE(bool, nfsmw_nativo_pcf_barato);\n",
-                        "REXCVAR_DECLARE(bool, nfsmw_nativo_pcf_barato);\nREXCVAR_DECLARE(int32_t, nfsmw_gsr2_depurar);  // carbon-gsr2\n", "declare depurar")
-              s4 = once(s4, "      plan->entradas.color = origen.vista;\n",
-                        "      // carbon-gsr2: debug view 4 = the copy of the scene before the HUD instead of the frame\n"
-                        "      plan->entradas.color = (REXCVAR_GET(nfsmw_gsr2_depurar) == 4 && plan->entradas.escena != VK_NULL_HANDLE)\n"
-                        "                                 ? plan->entradas.escena\n"
-                        "                                 : origen.vista;\n", "debug 4")
-              wr(p4, s4)
-              print("destinos debug view 4 added")
 
           # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
           p = C + "/CMakeLists.txt"
@@ -1670,7 +1454,6 @@ jobs:
               wr(p, s)
               print("patched carbon_graphics.cpp")
           PY
-
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
