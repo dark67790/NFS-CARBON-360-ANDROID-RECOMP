@@ -1217,27 +1217,33 @@ jobs:
               return gsr_rt_ != 0 && base_rt == uint32_t((gsr_rt_ >> 20) & 0xFFF) && pitch == uint32_t(gsr_rt_ & 0xFFFF);
             }
 
-            void GsrInstantanea(Imagen& rt) {
-              if (gsr_snaps_ >= 8 || gsr_formato_ == VK_FORMAT_UNDEFINED || !dibujos_ || !Grabar() || rt.contenido_invalido) {
-                return;
+            bool GsrInstantanea(Imagen& rt) {
+              if (gsr_snaps_ >= 12 || gsr_formato_ == VK_FORMAT_UNDEFINED || !dibujos_ || !Grabar()) {
+                return false;
               }
               const bool igual = rt.formato == gsr_formato_;
               if (igual ? !copiar_imagen_ : !blit_) {
-                return;
+                return false;
               }
               dibujos_->TerminarPase();  // a copy is not allowed inside a pass (the next draw resumes it)
               Resuelta* s = ObtenerResuelta(kClaveInstantaneaGsr, gsr_ancho_, gsr_alto_, 0, false, gsr_formato_);
               if (!s) {
-                return;
+                return false;
               }
               Preparar(rt);
               Preparar(s->imagen);
+              // The render target may be lent out (its content is in the texture it was resolved to, after a resolve by
+              // swapping): bring it back before reading it, as the next draw would.
+              if (rt.contenido_invalido) {
+                ++gsr_restauradas_;
+                RestaurarContenido(rt, true);
+              }
               const int64_t x0 = std::max<int32_t>(gsr_rect_[0], 0), y0 = std::max<int32_t>(gsr_rect_[1], 0);
               const int64_t dx = gsr_dx_, dy = gsr_dy_;
               const int64_t ancho = std::min<int64_t>({int64_t(gsr_rect_[2]) - x0, int64_t(rt.ancho) - x0, int64_t(s->imagen.ancho) - dx});
               const int64_t alto = std::min<int64_t>({int64_t(gsr_rect_[3]) - y0, int64_t(rt.alto) - y0, int64_t(s->imagen.alto) - dy});
               if (ancho <= 0 || alto <= 0) {
-                return;
+                return false;
               }
               MarcarGpu(kGpuCopias);
               if (igual) {
@@ -1262,24 +1268,27 @@ jobs:
               }
               ++gsr_snaps_;
               gsr_snap_valida_ = true;
+              GsrAnotarTramo('C', 0);
+              return true;
             }
 
             // The run-length list of draw classes of the frame, for the log: S = depth tested, O = opaque without depth,
             // H = blended without depth.
-            void GsrAnotarTramo(char clase, uint32_t huella) {
-              if (clase == gsr_clase_tramo_) {
+            void GsrAnotarTramo(char clase, uint32_t huella, uint32_t huella_vs = 0) {
+              if (clase == gsr_clase_tramo_ && huella == gsr_huella_tramo_ && huella_vs == gsr_huella_vs_tramo_) {
                 ++gsr_cuenta_tramo_;
                 return;
               }
-              if (gsr_clase_tramo_ && gsr_secuencia_.size() < 400) {
+              if (gsr_clase_tramo_ && gsr_secuencia_.size() < 1200) {
                 gsr_secuencia_ += fmt::format(" {}{}", gsr_clase_tramo_, gsr_cuenta_tramo_);
-                if (gsr_clase_tramo_ != 'S') {
-                  gsr_secuencia_ += fmt::format("({:08X})", gsr_huella_tramo_);
+                if (gsr_clase_tramo_ == 'O' || gsr_clase_tramo_ == 'H') {
+                  gsr_secuencia_ += fmt::format("({:08X}/{:08X})", gsr_huella_tramo_, gsr_huella_vs_tramo_);
                 }
               }
               gsr_clase_tramo_ = clase;
               gsr_cuenta_tramo_ = 1;
               gsr_huella_tramo_ = huella;
+              gsr_huella_vs_tramo_ = huella_vs;
             }
 
             void GsrAntesDeDibujo(const PeticionDibujo& p) {
@@ -1301,20 +1310,22 @@ jobs:
               const bool opaco = (mezcla & 0x1F) == 1 && ((mezcla >> 8) & 0x1F) == 0;  // ONE, ZERO
               const bool hud = !con_z && !opaco;
               const uint32_t huella = p.ps ? uint32_t(p.ps->huella) : 0;
-              GsrAnotarTramo(con_z ? 'S' : (opaco ? 'O' : 'H'), huella);
+              GsrAnotarTramo(con_z ? 'S' : (opaco ? 'O' : 'H'), con_z ? 0 : huella, con_z || !p.vs ? 0 : uint32_t(p.vs->huella));
               if (!hud) {
                 gsr_vio_escena_ = true;
-                gsr_en_hud_ = false;
+                gsr_sucio_ = true;  // the render target has scene draws that the last copy does not have
                 ++gsr_n_escena_;
                 return;
               }
               ++gsr_n_hud_;
-              if (gsr_vio_escena_ && !gsr_en_hud_) {
-                gsr_en_hud_ = true;
+              if (gsr_sucio_) {  // the first HUD draw after scene draws: the copy of the scene before the HUD
                 ++gsr_cortes_;
                 Imagen* rt = ObtenerDestino(info & 0xFFF, (info >> 16) & 0xF, pitch);
-                if (rt) {
-                  GsrInstantanea(*rt);
+                if (rt && GsrInstantanea(*rt)) {
+                  gsr_sucio_ = false;
+                } else {
+                  ++gsr_saltadas_;
+                  GsrAnotarTramo('x', 0);
                 }
               }
             }
@@ -1322,11 +1333,13 @@ jobs:
             // A resolve of the render target (the front buffer's, or any other of the frame): if scene draws came after the
             // last copy, the HUD is empty this frame (or nothing came after them): the copy is the frame itself.
             void GsrAntesDeResolver(Imagen& rt, uint32_t base_rt, uint32_t pitch) {
-              if (!GsrEsElDestinoFrontal(base_rt, pitch) || !gsr_vio_escena_ || gsr_en_hud_) {
+              if (!GsrEsElDestinoFrontal(base_rt, pitch)) {
                 return;
               }
-              gsr_en_hud_ = true;
-              GsrInstantanea(rt);
+              GsrAnotarTramo('R', 0);
+              if (gsr_sucio_ && GsrInstantanea(rt)) {
+                gsr_sucio_ = false;
+              }
             }
 
             void GsrFinDeFotograma() {
@@ -1334,17 +1347,20 @@ jobs:
                 return;
               }
               ++gsr_fotogramas_;
-              if (gsr_fotogramas_ <= 6 || gsr_fotogramas_ % 900 == 0) {
+              static int fallos_anotados = 0;
+              if (gsr_fotogramas_ <= 6 || gsr_fotogramas_ % 300 == 0 || (!gsr_snap_valida_ && fallos_anotados++ < 20)) {
                 GsrAnotarTramo(0, 0);  // closes the last run
                 REXLOG_INFO("[gsr2] dibujos al RT frontal (fotograma {}): {} de escena (S con profundidad, O opacos), {} de HUD (H sin "
-                            "profundidad y con mezcla), {} cortes, {} copias de la escena previa al HUD ({}); secuencia:{}",
+                            "profundidad y con mezcla), {} cortes, {} copias de la escena previa al HUD ({}), {} saltadas, {} destinos restaurados antes de copiar; "
+                            "secuencia (S/O/H dibujos, R resuelto del RT, C copia hecha, x copia fallida):{}",
                             gsr_fotogramas_, gsr_n_escena_, gsr_n_hud_, gsr_cortes_, gsr_snaps_, gsr_snap_valida_ ? "valida" : "NINGUNA",
-                            gsr_secuencia_);
+                            gsr_saltadas_, gsr_restauradas_, gsr_secuencia_);
               }
-              gsr_vio_escena_ = gsr_en_hud_ = gsr_snap_valida_ = false;
-              gsr_snaps_ = gsr_n_escena_ = gsr_n_hud_ = gsr_cortes_ = 0;
+              gsr_vio_escena_ = gsr_sucio_ = gsr_snap_valida_ = false;
+              gsr_snaps_ = gsr_n_escena_ = gsr_n_hud_ = gsr_cortes_ = gsr_saltadas_ = gsr_restauradas_ = 0;
               gsr_clase_tramo_ = 0;
               gsr_cuenta_tramo_ = 0;
+              gsr_huella_tramo_ = gsr_huella_vs_tramo_ = 0;
               gsr_secuencia_.clear();
             }
 
@@ -1579,15 +1595,30 @@ jobs:
                        "  uint32_t gsr_ancho_ = 0, gsr_alto_ = 0;\n"
                        "  int32_t gsr_dx_ = 0, gsr_dy_ = 0;\n"
                        "  int32_t gsr_rect_[4] = {};\n"
-                       "  bool gsr_vio_escena_ = false, gsr_en_hud_ = false, gsr_snap_valida_ = false;\n"
-                       "  uint32_t gsr_snaps_ = 0, gsr_n_escena_ = 0, gsr_n_hud_ = 0, gsr_cortes_ = 0;\n"
+                       "  bool gsr_vio_escena_ = false, gsr_sucio_ = false, gsr_snap_valida_ = false;\n"
+                       "  uint32_t gsr_snaps_ = 0, gsr_n_escena_ = 0, gsr_n_hud_ = 0, gsr_cortes_ = 0, gsr_saltadas_ = 0;\n"
+                       "  uint32_t gsr_restauradas_ = 0;\n"
                        "  uint32_t gsr_cuenta_tramo_ = 0;\n"
                        "  char gsr_clase_tramo_ = 0;\n"
-                       "  uint32_t gsr_huella_tramo_ = 0;\n"
+                       "  uint32_t gsr_huella_tramo_ = 0, gsr_huella_vs_tramo_ = 0;\n"
                        "  std::string gsr_secuencia_;\n"
                        "  uint32_t gsr_fotogramas_ = 0;\n", "members")
               wr(p, s)
               print("patched nfsmw_nativo_destinos.cpp")
+
+          # carbon-gsr2 (4th round): debug view 4 = the copy of the scene before the HUD, shown instead of the frame.
+          p4 = APP + "/nfsmw_nativo_destinos.cpp"
+          s4 = rd(p4)
+          if "nfsmw_gsr2_depurar" not in s4:
+              s4 = once(s4, "REXCVAR_DECLARE(bool, nfsmw_nativo_pcf_barato);\n",
+                        "REXCVAR_DECLARE(bool, nfsmw_nativo_pcf_barato);\nREXCVAR_DECLARE(int32_t, nfsmw_gsr2_depurar);  // carbon-gsr2\n", "declare depurar")
+              s4 = once(s4, "      plan->entradas.color = origen.vista;\n",
+                        "      // carbon-gsr2: debug view 4 = the copy of the scene before the HUD instead of the frame\n"
+                        "      plan->entradas.color = (REXCVAR_GET(nfsmw_gsr2_depurar) == 4 && plan->entradas.escena != VK_NULL_HANDLE)\n"
+                        "                                 ? plan->entradas.escena\n"
+                        "                                 : origen.vista;\n", "debug 4")
+              wr(p4, s4)
+              print("destinos debug view 4 added")
 
           # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
           p = C + "/CMakeLists.txt"
