@@ -15,6 +15,10 @@ on:
         description: "Upload the APK as an artifact (visible to anyone who can see the repo)"
         type: boolean
         default: false
+      validation_layer:
+        description: "TEST BUILD: bundle the Khronos Vulkan validation layer (bigger and slower APK)"
+        type: boolean
+        default: false
 
 concurrency:
   group: carbon-android-arm64
@@ -573,6 +577,139 @@ jobs:
           ])
           PY
 
+      - name: Patch - 2D squeeze (HUD, menus, videos) and draw diagnostics in the native renderer
+        shell: bash
+        run: |
+          set -euo pipefail
+          NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android"
+          python3 - "$NFS/app/src" <<'PY'
+          import sys
+
+          root = sys.argv[1]  # nfsmw-android/app/src
+
+
+          def patch(path, edits):
+              s = open(path, encoding="utf-8").read()
+              for marker, old, new in edits:
+                  if marker in s:
+                      print("already applied:", marker)
+                      continue
+                  n = s.count(old)
+                  if n != 1:
+                      sys.exit("ANCHOR NOT FOUND (%d times) for %s: %r" % (n, marker, old[:60]))
+                  s = s.replace(old, new, 1)
+                  print("applied:", marker)
+              open(path, "w", encoding="utf-8").write(s)
+
+
+          D = root + "/nfsmw_nativo_dibujos.cpp"
+          patch(D, [
+              ("carbon-2d-inc", "#include <cmath>\n", "#include <cmath>\n#include <cstdlib>  // carbon-2d-inc\n#include <map>\n"),
+              ("carbon-2d-cvar",
+               '"se graban (solo pruebas, para localizar un dibujo)");\n',
+               '"se graban (solo pruebas, para localizar un dibujo)");\n'
+               '// carbon-2d-cvar: 2D draws (HUD, menus, videos) squeezed to the 16:9 of the pass height, centred, on a wider pass.\n'
+               'REXCVAR_DEFINE_BOOL(carbon_2d_diag, false, "Carbon",\n'
+               '                    "Every 8 s, list the kinds of draw seen (VS, PS, pixel mode, viewport, pass) with their counts");\n'
+               'REXCVAR_DEFINE_STRING(carbon_2d_vs, "", "Carbon",\n'
+               '                      "Numbers of the vertex shaders whose draws are squeezed to the centre 16:9 on a wider pass, e.g. 12,13");\n'
+               'REXCVAR_DEFINE_BOOL(carbon_2d_sinrecorte, false, "Carbon",\n'
+               '                    "Squeeze every draw made with the clipping disabled (screen-pixel draws: videos, perhaps the HUD)");\n'),
+              ("carbon-2d-members",
+               "  std::string diag_omitir_ps_texto_;\n",
+               "  std::string diag_omitir_ps_texto_;\n"
+               "  bool carbon_2d_activo_ = false;  // carbon-2d-members\n"
+               "  bool carbon_2d_diag_ = false;\n"
+               "  bool carbon_2d_sinrecorte_ = false;\n"
+               "  std::string carbon_2d_vs_texto_;\n"
+               "  std::vector<uint32_t> carbon_2d_vs_;\n"
+               "  std::map<std::string, uint64_t> carbon_2d_visto_;\n"
+               "  std::chrono::steady_clock::time_point carbon_2d_informe_{};\n"),
+              ("carbon-2d-frame",
+               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n",
+               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n"
+               "    // carbon-2d-frame\n"
+               "    carbon_2d_diag_ = REXCVAR_GET(carbon_2d_diag);\n"
+               "    carbon_2d_sinrecorte_ = REXCVAR_GET(carbon_2d_sinrecorte);\n"
+               "    {\n"
+               "      const std::string v = REXCVAR_GET(carbon_2d_vs);\n"
+               "      if (v != carbon_2d_vs_texto_) {\n"
+               "        carbon_2d_vs_texto_ = v;\n"
+               "        carbon_2d_vs_.clear();\n"
+               "        size_t ini = 0;\n"
+               "        while (ini < v.size()) {\n"
+               "          const size_t fin = std::min(v.find(',', ini), v.size());\n"
+               "          const std::string t = v.substr(ini, fin - ini);\n"
+               "          if (!t.empty()) {\n"
+               "            carbon_2d_vs_.push_back(uint32_t(std::strtoul(t.c_str(), nullptr, 10)));\n"
+               "          }\n"
+               "          ini = fin + 1;\n"
+               "        }\n"
+               "        REXLOG_WARN(\"[carbon] 2D: {} vertex shaders in the list ('{}')\", carbon_2d_vs_.size(), v);\n"
+               "      }\n"
+               "      carbon_2d_activo_ = carbon_2d_diag_ || carbon_2d_sinrecorte_ || !carbon_2d_vs_.empty();\n"
+               "    }\n"),
+              ("carbon-2d-func",
+               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n",
+               "  // carbon-2d-func: the kinds of draw seen, listed every 8 s.\n"
+               "  void Registrar2D(uint32_t vs, int ps, bool sin_recorte, const VkViewport& viewport, bool elegido) {\n"
+               "    carbon_2d_visto_[fmt::format(\"VS n{} PS n{} {} viewport {:.0f}x{:.0f} pass {}x{}{}\", vs, ps,\n"
+               "                                  sin_recorte ? \"pixel-mode\" : \"clipped\", viewport.width,\n"
+               "                                  std::abs(viewport.height), pase_ancho_, pase_alto_,\n"
+               "                                  elegido ? \" [SQUEEZED]\" : \"\")]++;\n"
+               "    const auto ahora = std::chrono::steady_clock::now();\n"
+               "    if (ahora - carbon_2d_informe_ < std::chrono::seconds(8)) {\n"
+               "      return;\n"
+               "    }\n"
+               "    carbon_2d_informe_ = ahora;\n"
+               "    std::vector<std::pair<uint64_t, std::string>> orden;\n"
+               "    for (const auto& kv : carbon_2d_visto_) {\n"
+               "      orden.emplace_back(kv.second, kv.first);\n"
+               "    }\n"
+               "    std::sort(orden.begin(), orden.end(), [](const auto& a, const auto& b) { return a.first > b.first; });\n"
+               "    REXLOG_WARN(\"[carbon] 2D draws, last 8 s ({} kinds):\", orden.size());\n"
+               "    for (size_t i = 0; i < orden.size() && i < 40; ++i) {\n"
+               "      REXLOG_WARN(\"[carbon] 2D  {:6} x  {}\", orden[i].first, orden[i].second);\n"
+               "    }\n"
+               "    carbon_2d_visto_.clear();\n"
+               "  }\n\n"
+               "  // Squeezes the output of a draw to the centre 16:9 of a pass wider than 16:9 (k = how much wider).\n"
+               "  void Comprimir2D(bool sin_recorte, VkViewport& viewport, float ndc[4]) {\n"
+               "    if (pase_alto_ == 0) {\n"
+               "      return;\n"
+               "    }\n"
+               "    const float k = float(pase_ancho_) / (float(pase_alto_) * (16.0f / 9.0f));\n"
+               "    if (!(k > 1.02f)) {\n"
+               "      return;\n"
+               "    }\n"
+               "    if (sin_recorte) {  // x_out = x * ndc[0] + ndc[2]: scale the output about the centre\n"
+               "      ndc[0] /= k;\n"
+               "      ndc[2] /= k;\n"
+               "    } else {  // clip space through the viewport: the viewport shrinks about the centre of the pass\n"
+               "      const float centro = float(pase_ancho_) * 0.5f;\n"
+               "      viewport.x = centro + (viewport.x - centro) / k;\n"
+               "      viewport.width /= k;\n"
+               "    }\n"
+               "  }\n\n"
+               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n"),
+              ("carbon-2d-draw",
+               "    if (encuadre_vacio != 0) {\n      return true;  // empty viewport or scissor: as before\n    }\n",
+               "    if (encuadre_vacio != 0) {\n      return true;  // empty viewport or scissor: as before\n    }\n"
+               "    if (carbon_2d_activo_) {  // carbon-2d-draw\n"
+               "      bool elegido = sin_recorte && carbon_2d_sinrecorte_;\n"
+               "      for (uint32_t n : carbon_2d_vs_) {\n"
+               "        elegido = elegido || n == uint32_t(p.vs->numero);\n"
+               "      }\n"
+               "      if (carbon_2d_diag_) {\n"
+               "        Registrar2D(uint32_t(p.vs->numero), ps ? int(ps->numero) : -1, sin_recorte, viewport, elegido);\n"
+               "      }\n"
+               "      if (elegido) {\n"
+               "        Comprimir2D(sin_recorte, viewport, ndc);\n"
+               "      }\n"
+               "    }\n"),
+          ])
+          PY
+
       - name: Patch - GSR 2 temporal upscaler (victorgbd's port, pinned) for Carbon
         shell: bash
         run: |
@@ -1119,6 +1256,7 @@ jobs:
                   e.escena = it->second.imagen.vista;
                   e.escena_rb = it->second.intercambio_rb != (desde_destino ? false : frontal.intercambio_rb);
                   con_escena = true;
+                  gsr_necesita_copia_ = false;  // the game's own copy exists: no copy of ours
                 }
                 break;
               }
@@ -1267,6 +1405,432 @@ jobs:
               wr(p, s)
               print("patched nfsmw_nativo_destinos.cpp")
 
+          # ---------------------------------------------------------------- 4b. HUD layer at the output's resolution
+          # carbon-gsr2 capa: the HUD (and menus) is drawn at the output's size: its draws go to a transparent layer of the
+          # output's size (premultiplied color + coverage) through the renderer's own scaled-pass code, and the layer is put
+          # over the upscaled scene when presenting. GSR 2 then only upscales the scene. Separate blocks per file because the
+          # gsr2 sources and the shader header stay on the runner (untracked) from earlier runs.
+          import base64, zlib
+          COMPONER_B64 = (
+              "eNqVWNtu40YMffdX6LEF0s0MORepxT7YstT+QJ+KReC6znaBjR3Y3ktR9N87smOJnJD2JIAWsxbJwzs5ur+vft1sN/vVcfNX9bjf"
+              "PVXfDvcfD3u4X++ennfpzbvH/epj9cN6tf9zt/1pePVz9dvvy+rz6p/Nvtp9Tf8c/95UX54P69XnJOSwTvJ+fDebrXfbw7H68ml7"
+              "RHg4VtvHw9O3h8Mg4OEi++H58MeH6n3176xKf+a7iYAGDN4NZ2NseszLuU7P4uWc/pydziMNJBb6++UcTrwXDPLOtR5d6+JwDi66"
+              "iNANZzSYXpzPGQamR/r9LHPCiOnpyTuXn0MXmmDDUpFFfh/1wMElmR1UbiQ6IvkdxrNtL2eXHq/qxDGo7ZSnmc7REF/73A4XfB/a"
+              "cNLPYYjBRrhgJL9D6EMv+CHT0Z5sSrwm6YgF9GHEOPE4icdnPPPhHDH46M+xSVg+Qnzx80lXx/CYr+DsRx9wkHGRm2R0so7gJ3qn"
+              "03OM07toUr56N/pt+N/E46KcS7SGxvzEEz3DsCjnPpWb/CvGQKMBm+UVFPBAgR6R0UwYudw50+V1DV2jBwUj0wXsbX3BFdB4pQbd"
+              "KzoZ2xbQg17njCcU6LtQaXjutgWyutt5RWlsV2hHfxsbTZkdWBBnjAU0TVle4bxA1qKApi3zFS4LZHWFvirwuzPKPJfmGAq9RKJL"
+              "OWPpLKJ9xci1wnpJZgflpxhMVi3M42w2s745z+rDKLosGI/Yu5gerbKXUFkuy5lWmRmafzrdDs0/FhT/XPRoEg2pCeuuYFhldzLq"
+              "fib2Faaf1nepLpnfrL8xE4HPElvzGcXwG1l3WyvYjTyv8l5iKU8r28R6OLHDKruZzXs7KDmKsq8B5VwAYLbyvcTLs0yLJyzv5B6x"
+              "0DFgqcwiVHxFbMWT7tjXua+yvEJUepGRMSg9OtW3HMMrtTYvsKOWd2UMSp3ndxEj6JjqoKdyvdKH6gyjEezI6wDu5N1VoU+5J+zt"
+              "As+t3Zn2ynTncz3rjzx3jcLf3+hXSY/QybG0VsHAbD43jEe0j/ZaG6V7lMBD4sl6zHzKGR+U3rNkeNyOhRKDyPa+1/YNvnKyTXl9"
+              "WBI338txpjs169OdeL8eeiXruzQGNC+hIAZ07wbP6LkdJAYQ3xYDqBW8qMec9ermjTGYM2z2vUSNwULhb9QYjN+MXK/PKHoXgcWN"
+              "u0y+PwCrM7WXjBhXegm9l4w5UvNekt/V6D2F8kP/Bt0znV5hWOHO6vm3NzpjMMi5jk7PXTZzoiCrzvbSuXJ3six+3I4ozzWEyaYa"
+              "FYy5QH/GnjAG/k7+VkBnDvUnktqsrcLb6jEf5Q61bRXdl0yWOM+9vRKPTuG3Bdj9lTsnkL5r5Jqg90FmR6dggN536Q43yk3flvvl"
+              "dE55Mfvvl9n/SdzKvg=="
+          )
+          hdr_c = APP + "/shaders/nfsmw_sgsr2_componer_ps.h"
+          cc = zlib.decompress(base64.b64decode(COMPONER_B64)).decode()
+          if not os.path.exists(hdr_c) or rd(hdr_c) != cc:
+              wr(hdr_c, cc)
+              print("gsr2 composition shader written")
+
+          h = APP + "/nfsmw_gsr2.h"
+          sh = rd(h)
+          if "carbon-gsr2 capa" not in sh:
+              sh = once(sh, "  bool solo_2d = false;    // carbon-gsr2: no 3D draw this frame (menus): no history, just the upscale\n",
+                        "  bool solo_2d = false;    // carbon-gsr2: no 3D draw this frame (menus): no history, just the upscale\n"
+                        "  // carbon-gsr2 capa: the HUD layer (premultiplied color + coverage, output size, GENERAL) or VK_NULL_HANDLE\n"
+                        "  VkImageView capa = VK_NULL_HANDLE;\n", "capa field")
+              wr(h, sh)
+              print("gsr2 header: HUD layer field")
+
+          g = APP + "/nfsmw_gsr2.cpp"
+          s = rd(g)
+          if "carbon-gsr2 capa" not in s:
+              s = once(s, '#include "shaders/nfsmw_sgsr2_escalar_ps.h"\n',
+                       '#include "shaders/nfsmw_sgsr2_escalar_ps.h"\n#include "shaders/nfsmw_sgsr2_componer_ps.h"  // carbon-gsr2 capa\n', "capa include")
+              s = once(s, "    for (VkPipeline p : {pipeline_convertir_, pipeline_escalar_}) {",
+                       "    for (VkPipeline p : {pipeline_convertir_, pipeline_escalar_, pipeline_componer_}) {", "capa dtor pipeline")
+              s = once(s, "    for (VkShaderModule m : {fs_convertir_, fs_escalar_}) {",
+                       "    for (VkShaderModule m : {fs_convertir_, fs_escalar_, fs_componer_}) {", "capa dtor shader")
+              s = once(s, "    const uint32_t conjuntos = ranuras_ * 2;\n", "    const uint32_t conjuntos = ranuras_ * 3;  // carbon-gsr2 capa: convert, upscale, HUD layer\n", "capa sets")
+              s = once(s, "      r.conjunto_escalar = sets[1];\n",
+                       "      r.conjunto_escalar = sets[1];\n"
+                       "      {  // carbon-gsr2 capa: the third set (the HUD layer over the upscaled image)\n"
+                       "        VkDescriptorSetAllocateInfo reserva3{};\n"
+                       "        reserva3.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;\n"
+                       "        reserva3.descriptorPool = pool_;\n"
+                       "        reserva3.descriptorSetCount = 1;\n"
+                       "        reserva3.pSetLayouts = &layout_conjunto_;\n"
+                       "        if (dfn_.vkAllocateDescriptorSets(device_, &reserva3, &r.conjunto_componer) != VK_SUCCESS) {\n"
+                       "          return false;\n"
+                       "        }\n"
+                       "        VkDescriptorImageInfo muestreador3{cercano_, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};\n"
+                       "        VkWriteDescriptorSet escritura3{};\n"
+                       "        escritura3.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;\n"
+                       "        escritura3.dstSet = r.conjunto_componer;\n"
+                       "        escritura3.dstBinding = 4;\n"
+                       "        escritura3.descriptorCount = 1;\n"
+                       "        escritura3.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;\n"
+                       "        escritura3.pImageInfo = &muestreador3;\n"
+                       "        dfn_.vkUpdateDescriptorSets(device_, 1, &escritura3, 0, nullptr);\n"
+                       "      }\n", "capa third set")
+              s = once(s, "    if (fs_convertir_ == VK_NULL_HANDLE || fs_escalar_ == VK_NULL_HANDLE) {\n      return false;\n    }\n",
+                       "    if (fs_convertir_ == VK_NULL_HANDLE || fs_escalar_ == VK_NULL_HANDLE) {\n      return false;\n    }\n"
+                       "    fs_componer_ = rex::ui::vulkan::util::CreateShaderModule(dispositivo_, shaders::nfsmw_sgsr2_componer_ps,\n"
+                       "                                                             sizeof(shaders::nfsmw_sgsr2_componer_ps));  // carbon-gsr2 capa\n",
+                       "capa shader module")
+              s = once(s, "    pipeline_escalar_ = CrearPipeline(fs_escalar_);\n",
+                       "    pipeline_escalar_ = CrearPipeline(fs_escalar_);\n"
+                       "    pipeline_componer_ = fs_componer_ != VK_NULL_HANDLE ? CrearPipeline(fs_componer_) : VK_NULL_HANDLE;  // carbon-gsr2 capa\n",
+                       "capa pipeline")
+              s = once(s, "    VkDescriptorSet conjunto_escalar = VK_NULL_HANDLE;\n",
+                       "    VkDescriptorSet conjunto_escalar = VK_NULL_HANDLE;\n    VkDescriptorSet conjunto_componer = VK_NULL_HANDLE;  // carbon-gsr2 capa\n", "capa ranura")
+              s = once(s, "  VkShaderModule fs_escalar_ = VK_NULL_HANDLE;\n",
+                       "  VkShaderModule fs_escalar_ = VK_NULL_HANDLE;\n  VkShaderModule fs_componer_ = VK_NULL_HANDLE;  // carbon-gsr2 capa\n", "capa member fs")
+              s = once(s, "  VkPipeline pipeline_escalar_ = VK_NULL_HANDLE;\n",
+                       "  VkPipeline pipeline_escalar_ = VK_NULL_HANDLE;\n  VkPipeline pipeline_componer_ = VK_NULL_HANDLE;  // carbon-gsr2 capa\n"
+                       "  std::vector<Imagen> compuesta_;  // carbon-gsr2 capa: per slot, the upscaled scene with the HUD layer over it\n",
+                       "capa member pipeline")
+              s = once(s, "    DestruirImagen(historia_[1]);\n    ancho_render_ = alto_render_ = ancho_salida_ = alto_salida_ = 0;\n",
+                       "    DestruirImagen(historia_[1]);\n"
+                       "    for (Imagen& c : compuesta_) {  // carbon-gsr2 capa\n"
+                       "      DestruirImagen(c);\n"
+                       "    }\n"
+                       "    ancho_render_ = alto_render_ = ancho_salida_ = alto_salida_ = 0;\n", "capa destroy")
+              s = once(s, "    return historia_[actual].vista;\n  }\n\n private:\n",
+                       "    // carbon-gsr2 capa: the HUD layer over the upscaled scene. The history keeps the scene alone.\n"
+                       "    if (e.capa != VK_NULL_HANDLE && pipeline_componer_ != VK_NULL_HANDLE && r.conjunto_componer != VK_NULL_HANDLE) {\n"
+                       "      if (compuesta_.size() != porRanura_.size()) {\n"
+                       "        compuesta_.resize(porRanura_.size());\n"
+                       "      }\n"
+                       "      Imagen& c = compuesta_[ranura];\n"
+                       "      if (c.imagen == VK_NULL_HANDLE) {\n"
+                       "        if (CrearImagen(c, ancho_salida, alto_salida)) {\n"
+                       "          VkImageMemoryBarrier b{};\n"
+                       "          b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;\n"
+                       "          b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;\n"
+                       "          b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;\n"
+                       "          b.newLayout = VK_IMAGE_LAYOUT_GENERAL;\n"
+                       "          b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;\n"
+                       "          b.image = c.imagen;\n"
+                       "          b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};\n"
+                       "          dfn_.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,\n"
+                       "                                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);\n"
+                       "        } else {\n"
+                       "          DestruirImagen(c);\n"
+                       "        }\n"
+                       "      }\n"
+                       "      if (c.imagen != VK_NULL_HANDLE) {\n"
+                       "        VkDescriptorImageInfo imagenes_k[3] = {{VK_NULL_HANDLE, historia_[actual].vista, VK_IMAGE_LAYOUT_GENERAL},\n"
+                       "                                               {VK_NULL_HANDLE, e.capa, VK_IMAGE_LAYOUT_GENERAL},\n"
+                       "                                               {VK_NULL_HANDLE, historia_[actual].vista, VK_IMAGE_LAYOUT_GENERAL}};\n"
+                       "        VkWriteDescriptorSet escritura_k{};\n"
+                       "        escritura_k.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;\n"
+                       "        escritura_k.dstSet = r.conjunto_componer;\n"
+                       "        escritura_k.dstBinding = 1;\n"
+                       "        escritura_k.descriptorCount = 3;\n"
+                       "        escritura_k.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;\n"
+                       "        escritura_k.pImageInfo = imagenes_k;\n"
+                       "        dfn_.vkUpdateDescriptorSets(device_, 1, &escritura_k, 0, nullptr);\n"
+                       "        Pasada(cmd, c, ancho_salida, alto_salida, pipeline_componer_, r.conjunto_componer);\n"
+                       "        dfn_.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,\n"
+                       "                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &entre, 0, nullptr, 0, nullptr);\n"
+                       "        return c.vista;\n"
+                       "      }\n"
+                       "    }\n"
+                       "    return historia_[actual].vista;\n  }\n\n private:\n", "capa compose")
+              s = once(s, '                  e.rect_profundidad[3], mascara ? "si" : "no (sin la copia de la escena)");\n',
+                       '                  e.rect_profundidad[3],\n'
+                       '                  e.capa != VK_NULL_HANDLE ? "no hace falta (el HUD va en una capa a la resolucion de la pantalla)"\n'
+                       '                                           : (mascara ? "si" : "no (sin la copia de la escena)"));\n', "capa log")
+              wr(g, s)
+              print("gsr2 cpp: HUD layer composition added")
+
+          # ---- dibujos.cpp: the scaled pass, per axis, for the layer's image
+          pd = APP + "/nfsmw_nativo_dibujos.cpp"
+          sd = rd(pd)
+          if "carbon-gsr2 capa" not in sd:
+              sd = once(sd, "  float pase_escala_ = 1.0f;  // 1 except in the scaled shadow map\n",
+                        "  float pase_escala_ = 1.0f;  // 1 except in the scaled shadow map\n"
+                        "  float pase_escala_y_ = 1.0f;  // carbon-gsr2 capa: the same on the vertical axis\n"
+                        "  bool pase_capa_ = false;      // carbon-gsr2 capa: the pass draws into the HUD layer\n", "capa members")
+              sd = once(sd, "    if (pase_escala_ != 1.0f) {\n      escala_x *= pase_escala_;\n      centro_x *= pase_escala_;\n"
+                            "      escala_y *= pase_escala_;\n      centro_y *= pase_escala_;\n    }\n",
+                        "    if (pase_escala_ != 1.0f || pase_escala_y_ != 1.0f) {  // carbon-gsr2 capa: per axis\n"
+                        "      escala_x *= pase_escala_;\n      centro_x *= pase_escala_;\n"
+                        "      escala_y *= pase_escala_y_;\n      centro_y *= pase_escala_y_;\n    }\n", "capa viewport")
+              sd = once(sd, "    if (pase_escala_ != 1.0f) {  // also in guest pixels\n"
+                            "      x0 = int32_t(std::floor(float(x0) * pase_escala_));\n"
+                            "      y0 = int32_t(std::floor(float(y0) * pase_escala_));\n"
+                            "      x1 = int32_t(std::ceil(float(x1) * pase_escala_));\n"
+                            "      y1 = int32_t(std::ceil(float(y1) * pase_escala_));\n    }\n",
+                        "    if (pase_escala_ != 1.0f || pase_escala_y_ != 1.0f) {  // also in guest pixels (carbon-gsr2 capa: per axis)\n"
+                        "      x0 = int32_t(std::floor(float(x0) * pase_escala_));\n"
+                        "      y0 = int32_t(std::floor(float(y0) * pase_escala_y_));\n"
+                        "      x1 = int32_t(std::ceil(float(x1) * pase_escala_));\n"
+                        "      y1 = int32_t(std::ceil(float(y1) * pase_escala_y_));\n    }\n", "capa scissor")
+              sd = once(sd, "    if (area_util_) {\n      const auto it = alto_util_.find(pitch);\n",
+                        "    if (area_util_ && !(imagenes[0] && imagenes[0]->ancho_guest)) {  // carbon-gsr2 capa: not the HUD layer\n"
+                        "      const auto it = alto_util_.find(pitch);\n", "capa area")
+              sd = once(sd, "    if (area_util_) {\n      const uint32_t hasta = ",
+                        "    if (area_util_ && !pase_capa_) {  // carbon-gsr2 capa: the layer's scissors are in output pixels\n"
+                        "      const uint32_t hasta = ", "capa area record")
+              sd = once(sd, "    pase_escala_ = (es_sombras && pitch && ancho && ancho != pitch)\n"
+                            "                       ? float(ancho) / float(pitch)\n"
+                            "                       : 1.0f;\n",
+                        "    pase_escala_ = (es_sombras && pitch && ancho && ancho != pitch)\n"
+                        "                       ? float(ancho) / float(pitch)\n"
+                        "                       : 1.0f;\n"
+                        "    pase_escala_y_ = pase_escala_;\n"
+                        "    pase_capa_ = false;\n"
+                        "    if (imagenes[0] && imagenes[0]->ancho_guest && imagenes[0]->alto_guest) {  // carbon-gsr2 capa\n"
+                        "      pase_escala_ = float(imagenes[0]->ancho) / float(imagenes[0]->ancho_guest);\n"
+                        "      pase_escala_y_ = float(imagenes[0]->alto) / float(imagenes[0]->alto_guest);\n"
+                        "      pase_capa_ = true;\n"
+                        "    }\n", "capa pass scale")
+              wr(pd, sd)
+              print("patched nfsmw_nativo_dibujos.cpp (HUD layer scale)")
+
+          # ---- destinos.cpp
+          p5 = APP + "/nfsmw_nativo_destinos.cpp"
+          s5 = rd(p5)
+          if "carbon-gsr2 capa" not in s5:
+              s5 = once(s5, "REXCVAR_DEFINE_BOOL(nfsmw_nativo_resolver_sin_copia, true, \"NFSMW\",\n",
+                        "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_hud_nativo, true, \"NFSMW\",\n"
+                        "                    \"Snapdragon GSR 2: el HUD y los menus se dibujan a la resolucion de la pantalla encima de la escena ya \"\n"
+                        "                    \"escalada (carbon-gsr2 capa). false = se escalan con el resto del fotograma\");\n"
+                        "REXCVAR_DEFINE_BOOL(nfsmw_nativo_resolver_sin_copia, true, \"NFSMW\",\n", "capa cvar")
+              s5 = once(s5, "  bool Dibujar(const PeticionDibujo& peticion) override {\n    if (gsr_rt_ != 0) {\n      GsrAntesDeDibujo(peticion);  // carbon-gsr2: the scene before the HUD\n    }\n",
+                        "  bool Dibujar(const PeticionDibujo& peticion) override {\n"
+                        "    PeticionDibujo en_capa;  // carbon-gsr2 capa: the same draw with the HUD layer as target\n"
+                        "    const PeticionDibujo* a_dibujar = &peticion;\n"
+                        "    if (gsr_rt_ != 0) {\n"
+                        "      GsrAntesDeDibujo(peticion);  // carbon-gsr2: the scene before the HUD\n"
+                        "      if (GsrRedirigir(peticion, en_capa)) {\n"
+                        "        a_dibujar = &en_capa;\n"
+                        "      }\n"
+                        "    }\n", "capa dibujar head")
+              s5 = once(s5, "    return dibujos_ && dibujos_->Dibujar(peticion);\n  }\n\n  EstadisticasDibujos EstadisticasDeDibujos() const override {",
+                        "    return dibujos_ && dibujos_->Dibujar(*a_dibujar);\n  }\n\n  EstadisticasDibujos EstadisticasDeDibujos() const override {", "capa dibujar tail")
+              s5 = once(s5, "  ImagenNativa* DestinoColor(uint32_t base, uint32_t formato, uint32_t pitch) override {\n    Imagen* imagen = ObtenerDestino(base, formato, pitch);\n",
+                        "  ImagenNativa* DestinoColor(uint32_t base, uint32_t formato, uint32_t pitch) override {\n"
+                        "    if (base == kBaseCapaGsr && gsr_capa_activa_) {  // carbon-gsr2 capa: the HUD layer\n"
+                        "      Imagen& capa = gsr_capa_[gsr_capa_indice_];\n"
+                        "      if (!capa.imagen || !Grabar()) {\n"
+                        "        return nullptr;\n"
+                        "      }\n"
+                        "      Preparar(capa);\n"
+                        "      return &capa;\n"
+                        "    }\n"
+                        "    Imagen* imagen = ObtenerDestino(base, formato, pitch);\n", "capa destino color")
+              s5 = once(s5, "    Destruir(mosaico_);\n",
+                        "    Destruir(mosaico_);\n    for (Imagen& capa : gsr_capa_) {  // carbon-gsr2 capa\n      Destruir(capa);\n    }\n", "capa destroy")
+              s5 = once(s5, "  void GsrFinDeFotograma() {\n",
+                        r'''  // ---- carbon-gsr2 capa: the HUD drawn at the output's resolution ----------------------------------------------
+            // EDRAM base that no render target of the game uses (there are 2048 tiles): the draws that go to the layer are
+            // given this base in a copy of their registers, and DestinoColor answers with the layer.
+            static constexpr uint32_t kBaseCapaGsr = 0xFFE;
+            static constexpr uint32_t kCapasGsr = 4;  // a layer is read by the output of its frame: 3 outputs in flight + the one drawn
+
+            bool GsrCapasListas() {
+              if (!gsr_capa_permitida_ || !gsr2_ || !gsr_capa_prevista_ || !gsr_salida_ancho_ || !gsr_salida_alto_) {
+                return false;
+              }
+              const int32_t gw = gsr_rect_[2] - gsr_rect_[0], gh = gsr_rect_[3] - gsr_rect_[1];
+              if (gsr_rect_[0] != 0 || gsr_rect_[1] != 0 || gw <= 0 || gh <= 0) {
+                return false;  // the HUD's coordinates start at the corner of the render target
+              }
+              if (!gsr_capa_[0].imagen) {
+                for (uint32_t i = 0; i < kCapasGsr; ++i) {
+                  if (!Crear(gsr_capa_[i], gsr_salida_ancho_, gsr_salida_alto_,
+                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                             FormatoHostDestinoColor(3))) {
+                    for (uint32_t j = 0; j <= i; ++j) {
+                      Destruir(gsr_capa_[j]);
+                    }
+                    gsr_capa_permitida_ = false;
+                    REXLOG_ERROR("[gsr2] no se pudieron crear las capas del HUD ({}x{}): el HUD se escala como siempre",
+                                 gsr_salida_ancho_, gsr_salida_alto_);
+                    return false;
+                  }
+                }
+                REXLOG_INFO("[gsr2] capas del HUD: {} de {}x{} (el HUD del juego, de {}x{}, se dibuja a ese tamano)", kCapasGsr,
+                            gsr_salida_ancho_, gsr_salida_alto_, gw, gh);
+              }
+              if (gsr_capa_[0].ancho != gsr_salida_ancho_ || gsr_capa_[0].alto != gsr_salida_alto_) {
+                return false;  // the output changed size: no layer until it is back
+              }
+              for (Imagen& capa : gsr_capa_) {
+                capa.ancho_guest = uint32_t(gw);  // the size the game thinks the target has: the pass scale comes from it
+                capa.alto_guest = uint32_t(gh);
+              }
+              return true;
+            }
+
+            // The first HUD draw of the frame: the next layer, cleared.
+            bool GsrIniciarCapa() {
+              if (!GsrCapasListas() || !Grabar() || !dibujos_) {
+                return false;
+              }
+              dibujos_->TerminarPase();
+              const uint32_t siguiente = (gsr_capa_indice_ + 1) % kCapasGsr;
+              Imagen& capa = gsr_capa_[siguiente];
+              Preparar(capa);
+              if (!capa.preparada) {
+                return false;
+              }
+              VkMemoryBarrier antes{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+              antes.srcAccessMask = kAccesosImagenes;
+              antes.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+              dfn_.vkCmdPipelineBarrier(comandos_trabajo_, kEtapasImagenes, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &antes, 0,
+                                        nullptr, 0, nullptr);
+              const VkClearColorValue transparente{};
+              dfn_.vkCmdClearColorImage(comandos_trabajo_, capa.imagen, VK_IMAGE_LAYOUT_GENERAL, &transparente, 1, &kRangoColor);
+              VkMemoryBarrier despues{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+              despues.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+              despues.dstAccessMask = kAccesosImagenes;
+              dfn_.vkCmdPipelineBarrier(comandos_trabajo_, VK_PIPELINE_STAGE_TRANSFER_BIT, kEtapasImagenes, 0, 1, &despues, 0,
+                                        nullptr, 0, nullptr);
+              gsr_capa_indice_ = siguiente;
+              gsr_capa_activa_ = true;
+              gsr_capa_valida_ = true;
+              gsr_capa_dibujos_ = 0;
+              return true;
+            }
+
+            // The blend of a draw into the layer. The layer holds premultiplied color and coverage: "over" accumulates
+            // both, additive leaves the coverage, an opaque draw replaces. The color part stays as the game set it.
+            uint32_t GsrMezclaCapa(uint32_t mezcla) {
+              const uint32_t origen = mezcla & 0x1F, destino = (mezcla >> 8) & 0x1F;
+              uint32_t a_origen = 1, a_destino = 7;  // coverage = src + dst * (1 - src)
+              bool conocida = true;
+              if (origen == 1 && destino == 0) {
+                a_destino = 0;  // opaque: replaces
+              } else if (destino == 7 || destino == 5) {
+                a_destino = 7;  // over (SRC_ALPHA / ONE with ONE_MINUS_SRC_ALPHA, or the screen blend)
+              } else if (destino == 1) {
+                a_origen = 0;  // additive: the coverage stays
+                a_destino = 1;
+              } else {
+                conocida = false;  // multiply and others have no equivalent in a layer: the coverage stays
+                a_origen = 0;
+                a_destino = 1;
+              }
+              const uint32_t nueva = (mezcla & 0x1FFFu) | (a_origen << 16) | (a_destino << 24);
+              if (gsr_mezclas_avisadas_.size() < 24 &&
+                  std::find(gsr_mezclas_avisadas_.begin(), gsr_mezclas_avisadas_.end(), mezcla) == gsr_mezclas_avisadas_.end()) {
+                gsr_mezclas_avisadas_.push_back(mezcla);
+                REXLOG_INFO("[gsr2] capa del HUD: mezcla {:08X} -> {:08X}{}", mezcla, nueva,
+                            conocida ? "" : " (SIN equivalente en la capa: la cobertura se queda)");
+              }
+              return nueva;
+            }
+
+            // A draw to the front render target: if it is HUD (no depth test), the same draw into the layer, with the
+            // render target replaced in a copy of the registers. False = draw as it comes.
+            bool GsrRedirigir(const PeticionDibujo& p, PeticionDibujo& salida) {
+              if (!gsr_capa_cvar_leida_) {
+                gsr_capa_cvar_leida_ = true;
+                gsr_capa_permitida_ = REXCVAR_GET(nfsmw_gsr2_hud_nativo);
+                REXLOG_INFO("[gsr2] HUD a la resolucion de la pantalla: {}", gsr_capa_permitida_ ? "si" : "no (nfsmw_gsr2_hud_nativo = false)");
+              }
+              if (!gsr_capa_permitida_ || !dibujos_) {
+                return false;
+              }
+              const uint32_t* r = p.registros;
+              if (!r || (r[gr::XE_GPU_REG_RB_MODECONTROL] & 0x7) != uint32_t(xenos::EdramMode::kColorDepth)) {
+                return false;
+              }
+              const uint32_t info = r[gr::XE_GPU_REG_RB_COLOR_INFO];
+              const uint32_t pitch = r[gr::XE_GPU_REG_RB_SURFACE_INFO] & 0x3FFF;
+              if (!GsrEsElDestinoFrontal(info & 0xFFF, pitch) || (r[gr::XE_GPU_REG_RB_COLOR_MASK] & 0xF) == 0) {
+                return false;
+              }
+              if (((r[gr::XE_GPU_REG_RB_DEPTHCONTROL] >> 1) & 0x1) != 0) {  // depth test: scene geometry
+                if (gsr_capa_activa_) {
+                  gsr_capa_valida_ = false;  // scene after the HUD began: this frame cannot use the layer
+                }
+                return false;
+              }
+              if (!gsr_capa_activa_) {
+                const uint32_t mezcla = r[gr::XE_GPU_REG_RB_BLENDCONTROL0];
+                const bool opaco = (mezcla & 0x1F) == 1 && ((mezcla >> 8) & 0x1F) == 0;
+                if (opaco || !gsr_vio_escena_ || !GsrIniciarCapa()) {
+                  return false;  // the full-screen composite of the scene (opaque) and anything before the HUD stay
+                }
+              }
+              // The registers of the draw, with the layer as target (80 KB per draw: the HUD is 30-70 draws).
+              gsr_registros_.assign(r, r + kRegistrosEspejo);
+              gsr_registros_[gr::XE_GPU_REG_RB_COLOR_INFO] = (info & ~0xFFFu) | kBaseCapaGsr;
+              gsr_registros_[gr::XE_GPU_REG_RB_BLENDCONTROL0] = GsrMezclaCapa(r[gr::XE_GPU_REG_RB_BLENDCONTROL0]);
+              const uint32_t mascara = r[gr::XE_GPU_REG_RB_COLOR_MASK];
+              if ((mascara & 0x7) == 0x7) {
+                gsr_registros_[gr::XE_GPU_REG_RB_COLOR_MASK] = mascara | 0x8;  // the coverage is always written
+              }
+              salida = p;
+              salida.registros = gsr_registros_.data();
+              ++gsr_capa_dibujos_;
+              return true;
+            }
+
+            void GsrFinDeFotograma() {
+              if (gsr_capa_activa_ && (gsr_fotogramas_ < 6 || gsr_fotogramas_ % 300 == 0)) {
+                REXLOG_INFO("[gsr2] capa del HUD (fotograma {}): {} dibujos, {}", gsr_fotogramas_ + 1, gsr_capa_dibujos_,
+                            gsr_capa_valida_ ? "valida" : "INVALIDA (escena despues del HUD: este fotograma sale sin ella)");
+              }
+              gsr_capa_activa_ = false;
+              gsr_capa_valida_ = false;
+              gsr_capa_dibujos_ = 0;
+          ''', "capa functions")
+              s5 = once(s5, "    plan.activo = true;\n  }\n",
+                        "    if (gsr_capa_activa_ && gsr_capa_valida_) {  // carbon-gsr2 capa\n"
+                        "      if (!desde_destino && frontal.intercambio_rb) {\n"
+                        "        // The layer is in the render target's channel order: it cannot go over a red/blue swapped front buffer.\n"
+                        "        static bool avisado_rb = false;\n"
+                        "        if (!avisado_rb) {\n"
+                        "          avisado_rb = true;\n"
+                        "          REXLOG_WARN(\"[gsr2] capa del HUD: el buffer frontal tiene rojo y azul intercambiados, no se usa\");\n"
+                        "        }\n"
+                        "      } else {\n"
+                        "        e.capa = gsr_capa_[gsr_capa_indice_].vista;  // the front buffer has no HUD: the layer goes over the upscaled scene\n"
+                        "        e.escena = VK_NULL_HANDLE;                   // and there is nothing to mask\n"
+                        "      }\n"
+                        "    }\n"
+                        "    plan.activo = true;\n  }\n", "capa plan")
+              s5 = once(s5, "    const bool con_gsr2 = plan_gsr2.activo && (plan_gsr2.ancho_salida > w || plan_gsr2.alto_salida > h);\n",
+                        "    const bool con_gsr2 = plan_gsr2.activo && (plan_gsr2.ancho_salida > w || plan_gsr2.alto_salida > h);\n"
+                        "    // carbon-gsr2 capa: the output's size for the HUD layers of the next frames, and this frame's layer only if it fits.\n"
+                        "    gsr_capa_prevista_ = con_gsr2;\n"
+                        "    if (con_gsr2) {\n"
+                        "      gsr_salida_ancho_ = plan_gsr2.ancho_salida;\n"
+                        "      gsr_salida_alto_ = plan_gsr2.alto_salida;\n"
+                        "      if (plan_gsr2.entradas.capa != VK_NULL_HANDLE &&\n"
+                        "          (gsr_capa_[gsr_capa_indice_].ancho != plan_gsr2.ancho_salida ||\n"
+                        "           gsr_capa_[gsr_capa_indice_].alto != plan_gsr2.alto_salida)) {\n"
+                        "        plan_gsr2.entradas.capa = VK_NULL_HANDLE;\n"
+                        "      }\n"
+                        "    } else {\n"
+                        "      plan_gsr2.entradas.capa = VK_NULL_HANDLE;\n"
+                        "    }\n", "capa present")
+              s5 = once(s5, "  uint32_t gsr_fotogramas_ = 0;\n",
+                        "  uint32_t gsr_fotogramas_ = 0;\n"
+                        "  // carbon-gsr2 capa\n"
+                        "  static constexpr size_t kRegistrosEspejo = 0x5003;  // RegisterFile::kRegisterCount\n"
+                        "  Imagen gsr_capa_[4];\n"
+                        "  uint32_t gsr_capa_indice_ = 0;\n"
+                        "  bool gsr_capa_activa_ = false;      // the frame's HUD draws go to the layer\n"
+                        "  bool gsr_capa_valida_ = false;      // and nothing that belongs to the scene came after the first one\n"
+                        "  bool gsr_capa_prevista_ = false;    // the last frame went through GSR 2\n"
+                        "  bool gsr_capa_permitida_ = true;    // false if the layers could not be created or the setting is off\n"
+                        "  bool gsr_capa_cvar_leida_ = false;\n"
+                        "  uint32_t gsr_salida_ancho_ = 0, gsr_salida_alto_ = 0;\n"
+                        "  uint32_t gsr_capa_dibujos_ = 0;\n"
+                        "  std::vector<uint32_t> gsr_registros_;\n"
+                        "  std::vector<uint32_t> gsr_mezclas_avisadas_;\n", "capa members")
+              wr(p5, s5)
+              print("patched nfsmw_nativo_destinos.cpp (HUD layer)")
+
           # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
           p = C + "/CMakeLists.txt"
           s = rd(p)
@@ -1379,6 +1943,22 @@ jobs:
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
 
+      - name: Validation layer (test builds only)
+        env:
+          WITH_VALIDATION: ${{ inputs.validation_layer }}
+        run: |
+          dest="android/app/src/main/jniLibs/arm64-v8a"
+          src="$W/nfsmw-android/android/app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so"
+          if [ "$WITH_VALIDATION" = "true" ]; then
+            [ -f "$src" ] || { echo "::error::Validation layer not found at $src"; exit 1; }
+            mkdir -p "$dest"
+            cp "$src" "$dest/"
+            echo "Validation layer bundled:"; ls -l "$dest/libVkLayer_khronos_validation.so"
+          else
+            rm -f "$dest/libVkLayer_khronos_validation.so"
+            echo "Normal build: no validation layer"
+          fi
+
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
           cd android
@@ -1390,11 +1970,15 @@ jobs:
             -Pandroid.aapt2FromMavenOverride="$AAPT2"
 
       - name: Collect APK
+        env:
+          WITH_VALIDATION: ${{ inputs.validation_layer }}
         run: |
           apk="android/app/build/outputs/apk/release/app-release.apk"
           test -f "$apk"
           mkdir -p out/apk "$W/_out"
-          name="carbon-android-arm64-${GITHUB_SHA::8}-run${GITHUB_RUN_NUMBER}.apk"
+          suffix=""
+          [ "$WITH_VALIDATION" = "true" ] && suffix="${suffix}-validation"
+          name="carbon-android-arm64-${GITHUB_SHA::8}-run${GITHUB_RUN_NUMBER}${suffix}.apk"
           cp "$apk" "out/apk/$name"
           cp "$apk" "$W/_out/$name"
           {
