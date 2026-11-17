@@ -15,10 +15,6 @@ on:
         description: "Upload the APK as an artifact (visible to anyone who can see the repo)"
         type: boolean
         default: false
-      validation_layer:
-        description: "TEST BUILD: bundle the Khronos Vulkan validation layer (bigger and slower APK)"
-        type: boolean
-        default: false
 
 concurrency:
   group: carbon-android-arm64
@@ -574,139 +570,6 @@ jobs:
                '      valores += ")";\n'
                '    }\n'
                '    REXLOG_INFO("[nativo] constantes PS n{} (Swap {}):{}", ps_dibujo_->numero, swaps_.load(), valores);\n'),
-          ])
-          PY
-
-      - name: Patch - 2D squeeze (HUD, menus, videos) and draw diagnostics in the native renderer
-        shell: bash
-        run: |
-          set -euo pipefail
-          NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android"
-          python3 - "$NFS/app/src" <<'PY'
-          import sys
-
-          root = sys.argv[1]  # nfsmw-android/app/src
-
-
-          def patch(path, edits):
-              s = open(path, encoding="utf-8").read()
-              for marker, old, new in edits:
-                  if marker in s:
-                      print("already applied:", marker)
-                      continue
-                  n = s.count(old)
-                  if n != 1:
-                      sys.exit("ANCHOR NOT FOUND (%d times) for %s: %r" % (n, marker, old[:60]))
-                  s = s.replace(old, new, 1)
-                  print("applied:", marker)
-              open(path, "w", encoding="utf-8").write(s)
-
-
-          D = root + "/nfsmw_nativo_dibujos.cpp"
-          patch(D, [
-              ("carbon-2d-inc", "#include <cmath>\n", "#include <cmath>\n#include <cstdlib>  // carbon-2d-inc\n#include <map>\n"),
-              ("carbon-2d-cvar",
-               '"se graban (solo pruebas, para localizar un dibujo)");\n',
-               '"se graban (solo pruebas, para localizar un dibujo)");\n'
-               '// carbon-2d-cvar: 2D draws (HUD, menus, videos) squeezed to the 16:9 of the pass height, centred, on a wider pass.\n'
-               'REXCVAR_DEFINE_BOOL(carbon_2d_diag, false, "Carbon",\n'
-               '                    "Every 8 s, list the kinds of draw seen (VS, PS, pixel mode, viewport, pass) with their counts");\n'
-               'REXCVAR_DEFINE_STRING(carbon_2d_vs, "", "Carbon",\n'
-               '                      "Numbers of the vertex shaders whose draws are squeezed to the centre 16:9 on a wider pass, e.g. 12,13");\n'
-               'REXCVAR_DEFINE_BOOL(carbon_2d_sinrecorte, false, "Carbon",\n'
-               '                    "Squeeze every draw made with the clipping disabled (screen-pixel draws: videos, perhaps the HUD)");\n'),
-              ("carbon-2d-members",
-               "  std::string diag_omitir_ps_texto_;\n",
-               "  std::string diag_omitir_ps_texto_;\n"
-               "  bool carbon_2d_activo_ = false;  // carbon-2d-members\n"
-               "  bool carbon_2d_diag_ = false;\n"
-               "  bool carbon_2d_sinrecorte_ = false;\n"
-               "  std::string carbon_2d_vs_texto_;\n"
-               "  std::vector<uint32_t> carbon_2d_vs_;\n"
-               "  std::map<std::string, uint64_t> carbon_2d_visto_;\n"
-               "  std::chrono::steady_clock::time_point carbon_2d_informe_{};\n"),
-              ("carbon-2d-frame",
-               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n",
-               "    diag_omitir_ps_texto_ = REXCVAR_GET(nfsmw_nativo_diag_omitir_ps);\n"
-               "    // carbon-2d-frame\n"
-               "    carbon_2d_diag_ = REXCVAR_GET(carbon_2d_diag);\n"
-               "    carbon_2d_sinrecorte_ = REXCVAR_GET(carbon_2d_sinrecorte);\n"
-               "    {\n"
-               "      const std::string v = REXCVAR_GET(carbon_2d_vs);\n"
-               "      if (v != carbon_2d_vs_texto_) {\n"
-               "        carbon_2d_vs_texto_ = v;\n"
-               "        carbon_2d_vs_.clear();\n"
-               "        size_t ini = 0;\n"
-               "        while (ini < v.size()) {\n"
-               "          const size_t fin = std::min(v.find(',', ini), v.size());\n"
-               "          const std::string t = v.substr(ini, fin - ini);\n"
-               "          if (!t.empty()) {\n"
-               "            carbon_2d_vs_.push_back(uint32_t(std::strtoul(t.c_str(), nullptr, 10)));\n"
-               "          }\n"
-               "          ini = fin + 1;\n"
-               "        }\n"
-               "        REXLOG_WARN(\"[carbon] 2D: {} vertex shaders in the list ('{}')\", carbon_2d_vs_.size(), v);\n"
-               "      }\n"
-               "      carbon_2d_activo_ = carbon_2d_diag_ || carbon_2d_sinrecorte_ || !carbon_2d_vs_.empty();\n"
-               "    }\n"),
-              ("carbon-2d-func",
-               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n",
-               "  // carbon-2d-func: the kinds of draw seen, listed every 8 s.\n"
-               "  void Registrar2D(uint32_t vs, int ps, bool sin_recorte, const VkViewport& viewport, bool elegido) {\n"
-               "    carbon_2d_visto_[fmt::format(\"VS n{} PS n{} {} viewport {:.0f}x{:.0f} pass {}x{}{}\", vs, ps,\n"
-               "                                  sin_recorte ? \"pixel-mode\" : \"clipped\", viewport.width,\n"
-               "                                  std::abs(viewport.height), pase_ancho_, pase_alto_,\n"
-               "                                  elegido ? \" [SQUEEZED]\" : \"\")]++;\n"
-               "    const auto ahora = std::chrono::steady_clock::now();\n"
-               "    if (ahora - carbon_2d_informe_ < std::chrono::seconds(8)) {\n"
-               "      return;\n"
-               "    }\n"
-               "    carbon_2d_informe_ = ahora;\n"
-               "    std::vector<std::pair<uint64_t, std::string>> orden;\n"
-               "    for (const auto& kv : carbon_2d_visto_) {\n"
-               "      orden.emplace_back(kv.second, kv.first);\n"
-               "    }\n"
-               "    std::sort(orden.begin(), orden.end(), [](const auto& a, const auto& b) { return a.first > b.first; });\n"
-               "    REXLOG_WARN(\"[carbon] 2D draws, last 8 s ({} kinds):\", orden.size());\n"
-               "    for (size_t i = 0; i < orden.size() && i < 40; ++i) {\n"
-               "      REXLOG_WARN(\"[carbon] 2D  {:6} x  {}\", orden[i].first, orden[i].second);\n"
-               "    }\n"
-               "    carbon_2d_visto_.clear();\n"
-               "  }\n\n"
-               "  // Squeezes the output of a draw to the centre 16:9 of a pass wider than 16:9 (k = how much wider).\n"
-               "  void Comprimir2D(bool sin_recorte, VkViewport& viewport, float ndc[4]) {\n"
-               "    if (pase_alto_ == 0) {\n"
-               "      return;\n"
-               "    }\n"
-               "    const float k = float(pase_ancho_) / (float(pase_alto_) * (16.0f / 9.0f));\n"
-               "    if (!(k > 1.02f)) {\n"
-               "      return;\n"
-               "    }\n"
-               "    if (sin_recorte) {  // x_out = x * ndc[0] + ndc[2]: scale the output about the centre\n"
-               "      ndc[0] /= k;\n"
-               "      ndc[2] /= k;\n"
-               "    } else {  // clip space through the viewport: the viewport shrinks about the centre of the pass\n"
-               "      const float centro = float(pase_ancho_) * 0.5f;\n"
-               "      viewport.x = centro + (viewport.x - centro) / k;\n"
-               "      viewport.width /= k;\n"
-               "    }\n"
-               "  }\n\n"
-               "  bool Reservar(VkDeviceSize bytes, VkDeviceSize alineacion, VkDeviceSize& offset) {\n"),
-              ("carbon-2d-draw",
-               "    if (encuadre_vacio != 0) {\n      return true;  // empty viewport or scissor: as before\n    }\n",
-               "    if (encuadre_vacio != 0) {\n      return true;  // empty viewport or scissor: as before\n    }\n"
-               "    if (carbon_2d_activo_) {  // carbon-2d-draw\n"
-               "      bool elegido = sin_recorte && carbon_2d_sinrecorte_;\n"
-               "      for (uint32_t n : carbon_2d_vs_) {\n"
-               "        elegido = elegido || n == uint32_t(p.vs->numero);\n"
-               "      }\n"
-               "      if (carbon_2d_diag_) {\n"
-               "        Registrar2D(uint32_t(p.vs->numero), ps ? int(ps->numero) : -1, sin_recorte, viewport, elegido);\n"
-               "      }\n"
-               "      if (elegido) {\n"
-               "        Comprimir2D(sin_recorte, viewport, ndc);\n"
-               "      }\n"
-               "    }\n"),
           ])
           PY
 
@@ -1516,22 +1379,6 @@ jobs:
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
 
-      - name: Validation layer (test builds only)
-        env:
-          WITH_VALIDATION: ${{ inputs.validation_layer }}
-        run: |
-          dest="android/app/src/main/jniLibs/arm64-v8a"
-          src="$W/nfsmw-android/android/app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so"
-          if [ "$WITH_VALIDATION" = "true" ]; then
-            [ -f "$src" ] || { echo "::error::Validation layer not found at $src"; exit 1; }
-            mkdir -p "$dest"
-            cp "$src" "$dest/"
-            echo "Validation layer bundled:"; ls -l "$dest/libVkLayer_khronos_validation.so"
-          else
-            rm -f "$dest/libVkLayer_khronos_validation.so"
-            echo "Normal build: no validation layer"
-          fi
-
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
           cd android
@@ -1543,15 +1390,11 @@ jobs:
             -Pandroid.aapt2FromMavenOverride="$AAPT2"
 
       - name: Collect APK
-        env:
-          WITH_VALIDATION: ${{ inputs.validation_layer }}
         run: |
           apk="android/app/build/outputs/apk/release/app-release.apk"
           test -f "$apk"
           mkdir -p out/apk "$W/_out"
-          suffix=""
-          [ "$WITH_VALIDATION" = "true" ] && suffix="${suffix}-validation"
-          name="carbon-android-arm64-${GITHUB_SHA::8}-run${GITHUB_RUN_NUMBER}${suffix}.apk"
+          name="carbon-android-arm64-${GITHUB_SHA::8}-run${GITHUB_RUN_NUMBER}.apk"
           cp "$apk" "out/apk/$name"
           cp "$apk" "$W/_out/$name"
           {
