@@ -1241,6 +1241,66 @@ if "carbon-gsr2 diag4" not in s9:
     wr(p5, s9)
     print("patched nfsmw_nativo_destinos.cpp (diag4)")
 
+# ---- destinos.cpp: texture comparison between GSR on and off (diagnostic, works with GSR off too)
+s10 = rd(p5)
+if "carbon-gsr2 diag5" not in s10:
+    s10 = once(s10, "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_hud_nativo, true, \"NFSMW\",\n",
+               "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_diag_texturas, false, \"NFSMW\",\n"
+               "                    \"Snapdragon GSR 2 (diagnostico, carbon-gsr2 diag5): anota las texturas y un hash de su contenido en los \"\n"
+               "                    \"dibujos aditivos con VS 79 y PS 1 (con GSR o sin el)\");\n"
+               "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_hud_nativo, true, \"NFSMW\",\n", "diag5 cvar")
+    s10 = once(s10, "    PeticionDibujo en_capa;  // carbon-gsr2 capa: the same draw with the HUD layer as target\n",
+               "    if (gsr_diag_tex_estado_ != 2) {  // carbon-gsr2 diag5\n"
+               "      if (gsr_diag_tex_estado_ == 0) {\n"
+               "        gsr_diag_tex_estado_ = REXCVAR_GET(nfsmw_gsr2_diag_texturas) ? 1 : 2;\n"
+               "      }\n"
+               "      if (gsr_diag_tex_estado_ == 1) {\n"
+               "        GsrDiagTexturas(peticion);\n"
+               "      }\n"
+               "    }\n"
+               "    PeticionDibujo en_capa;  // carbon-gsr2 capa: the same draw with the HUD layer as target\n", "diag5 call")
+    s10 = once(s10, "  void GsrAntesDeDibujo(const PeticionDibujo& p) {\n",
+               "  // carbon-gsr2 diag5: textures of the additive draws with VS 79 and PS 1, with a hash of the guest memory they read.\n"
+               "  void GsrDiagTexturas(const PeticionDibujo& p) {\n"
+               "    const uint32_t* r = p.registros;\n"
+               "    if (!r || !p.vs || !p.ps || p.vs->numero != 79 || p.ps->numero != 1 || gsr_diag_tex_lineas_ >= 200) {\n"
+               "      return;\n"
+               "    }\n"
+               "    const uint32_t m = r[gr::XE_GPU_REG_RB_BLENDCONTROL0];\n"
+               "    if (((m >> 8) & 0x1F) != 1 || (m & 0x1F) == 1) {\n"
+               "      return;  // not additive\n"
+               "    }\n"
+               "    if (gsr_diag_tex_n_++ % 600 >= 8) {\n"
+               "      return;\n"
+               "    }\n"
+               "    std::string t;\n"
+               "    for (uint32_t i = 0; i < 6; ++i) {\n"
+               "      const uint32_t* c = r + gr::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + i * 6;\n"
+               "      const uint32_t base = c[1] & 0xFFFFF000u, ancho = (c[2] & 0x1FFF) + 1, alto = ((c[2] >> 13) & 0x1FFF) + 1;\n"
+               "      if (!base || ancho > 2048 || alto > 2048) {\n"
+               "        continue;\n"
+               "      }\n"
+               "      const uint32_t fmt = c[1] & 0x3F;\n"
+               "      uint64_t bytes = fmt == 18 ? uint64_t(ancho) * alto / 2 : uint64_t(ancho) * alto * 4;\n"
+               "      bytes = std::min<uint64_t>(bytes, 262144);\n"
+               "      uint64_t h = 1469598103934665603ull;\n"
+               "      if (const uint8_t* d = memoria_->TranslatePhysical(base)) {\n"
+               "        for (uint64_t b = 0; b < bytes; ++b) {\n"
+               "          h = (h ^ d[b]) * 1099511628211ull;\n"
+               "        }\n"
+               "      }\n"
+               "      t += fmt::format(\" | s{} {:08X} {}x{} fmt{} f3 {:08X} f4 {:08X} hash {:016X}\", i, base, ancho, alto, fmt, c[3], c[4], h);\n"
+               "    }\n"
+               "    ++gsr_diag_tex_lineas_;\n"
+               "    REXLOG_INFO(\"[gsr2] TEX GSR {} mezcla {:08X}{}\", gsr_rt_ != 0 ? \"si\" : \"no\", m, t);\n"
+               "  }\n\n"
+               "  void GsrAntesDeDibujo(const PeticionDibujo& p) {\n", "diag5 func")
+    s10 = once(s10, "  // carbon-gsr2 diag2\n  uint32_t gsr_diag_capa_ = 0;\n",
+               "  // carbon-gsr2 diag5\n  uint32_t gsr_diag_tex_estado_ = 0, gsr_diag_tex_n_ = 0, gsr_diag_tex_lineas_ = 0;\n"
+               "  // carbon-gsr2 diag2\n  uint32_t gsr_diag_capa_ = 0;\n", "diag5 members")
+    wr(p5, s10)
+    print("patched nfsmw_nativo_destinos.cpp (diag5)")
+
 # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
 p = C + "/CMakeLists.txt"
 s = rd(p)
