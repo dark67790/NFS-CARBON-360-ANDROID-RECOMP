@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """GSR 2 (victorgbd's port for Most Wanted) onto the pinned nfsmw-android + Carbon.
 usage: patch.py NFS_ROOT CARBON_ROOT MW_NATIVO_DIR
@@ -1202,6 +1203,30 @@ if "carbon-gsr2 diag2" not in s7:
               "  // carbon-gsr2 diag\n  std::string gsr_diag_;\n", "diag2 members")
     wr(p5, s7)
     print("patched nfsmw_nativo_destinos.cpp (layer experiments)")
+
+# ---- destinos.cpp: textures of the additive HUD draws + split of the additive test (diagnostic)
+s8 = rd(p5)
+if "carbon-gsr2 diag3" not in s8:
+    s8 = once(s8, "                               (br >> 16) & 0x3FFF);\n    }\n",
+              "                               (br >> 16) & 0x3FFF);\n"
+              "      if (!con_z && !opaco && ((mezcla >> 8) & 0x1F) == 1 && (mezcla & 0x1F) != 1) {  // carbon-gsr2 diag3: additive HUD\n"
+              "        std::string t;\n"
+              "        for (uint32_t i = 0; i < 16; ++i) {\n"
+              "          const uint32_t* c = r + gr::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + i * 6;\n"
+              "          if (c[1] & 0xFFFFF000u) {\n"
+              "            t += fmt::format(\" s{}:{:08X} {}x{} fmt{} tipo{}\", i, c[1] & 0xFFFFF000u, (c[2] & 0x1FFF) + 1,\n"
+              "                             ((c[2] >> 13) & 0x1FFF) + 1, c[1] & 0x3F, c[0] & 3);\n"
+              "          }\n"
+              "        }\n"
+              "        gsr_diag_ += fmt::format(\"       texturas:{}\\n\", t);\n"
+              "      }\n"
+              "    }\n", "diag3 textures")
+    s8 = once(s8, "      if (((gsr_diag_capa_ & 1) && vs72) || ((gsr_diag_capa_ & 2) && aditivo) ||\n",
+              "      if (((gsr_diag_capa_ & 16) && aditivo && gsr_capa_dibujos_ <= 100) ||  // carbon-gsr2 diag3\n"
+              "          ((gsr_diag_capa_ & 32) && aditivo && gsr_capa_dibujos_ > 100) ||\n"
+              "          ((gsr_diag_capa_ & 1) && vs72) || ((gsr_diag_capa_ & 2) && aditivo) ||\n", "diag3 split")
+    wr(p5, s8)
+    print("patched nfsmw_nativo_destinos.cpp (diag3)")
 
 # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
 p = C + "/CMakeLists.txt"
