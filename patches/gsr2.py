@@ -2,7 +2,7 @@
 """GSR 2 (victorgbd's port for Most Wanted) onto the pinned nfsmw-android + Carbon.
 usage: patch.py NFS_ROOT CARBON_ROOT MW_NATIVO_DIR
 Idempotent (marker carbon-gsr2), strict anchors (exactly one match or fail)."""
-import sys, os, shutil
+import sys, os, shutil, base64, zlib, re
 
 NFS, C, MW = sys.argv[1], sys.argv[2], sys.argv[3]
 APP = NFS + "/app/src"
@@ -272,12 +272,9 @@ else:
              "        });\n"
              "    if (gsr2_) {\n"
              "      nfsmw::gsr2::AnotarUso(con_gsr2 && llamada && ultimo_gsr2_hecho_);  // the game jitters only while it upscales\n"
-             "    }\n", "presentar refresh")
-    # PrepararGsr2, before PintarSalida's comment
-    prep = open(os.path.dirname(os.path.abspath(__file__)) + "/prepararGsr2.inc").read() if False else None
+             "    }\n", "presenter refresh")
     s = once(s, "  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n",
-             "@@PREPARAR@@  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n", "prep anchor")
-    s = s.replace("@@PREPARAR@@", r'''  // carbon-gsr2: the composited scene before the HUD, copied when the draws to the front render target change from
+             r'''  // carbon-gsr2: the composited scene before the HUD, copied when the draws to the front render target change from
   // "scene" (depth tested, or opaque) to "HUD" (depth off and blended: FEng text, icons, the rain). GSR 2 compares the
   // final frame with this copy to find the HUD pixels: those are not 3D (no jitter, no history). The copy goes to a
   // texture with a made-up address, in the same format as the image GSR 2 reads, so both match bit for bit.
@@ -567,8 +564,7 @@ else:
     plan.activo = true;
   }
 
-''')
-    # PintarSalida
+''', "prep anchor")
     s = once(s, "  bool PintarSalida(VulkanPresenter::VulkanGuestOutputRefreshContext& contexto, Imagen& origen,\n"
                 "                    uint32_t ancho, uint32_t alto, bool desde_destino = false) {\n",
              "  bool PintarSalida(VulkanPresenter::VulkanGuestOutputRefreshContext& contexto, Imagen& origen,\n"
@@ -681,11 +677,6 @@ else:
     print("patched nfsmw_nativo_destinos.cpp")
 
 # ---------------------------------------------------------------- 4b. HUD layer at the output's resolution
-# carbon-gsr2 capa: the HUD (and menus) is drawn at the output's size: its draws go to a transparent layer of the
-# output's size (premultiplied color + coverage) through the renderer's own scaled-pass code, and the layer is put
-# over the upscaled scene when presenting. GSR 2 then only upscales the scene. Separate blocks per file because the
-# gsr2 sources and the shader header stay on the runner (untracked) from earlier runs.
-import base64, zlib
 COMPONER_B64 = (
     "eNqVWNtu40YMffdX6LEF0s0MORepxT7YstT+QJ+KReC6znaBjR3Y3ktR9N87smOJnJD2JIAWsxbJwzs5ur+vft1sN/vVcfNX9bjf"
     "PVXfDvcfD3u4X++ennfpzbvH/epj9cN6tf9zt/1pePVz9dvvy+rz6p/Nvtp9Tf8c/95UX54P69XnJOSwTvJ+fDebrXfbw7H68ml7"
@@ -696,9 +687,9 @@ COMPONER_B64 = (
     "KzoZ2xbQg17njCcU6LtQaXjutgWyutt5RWlsV2hHfxsbTZkdWBBnjAU0TVle4bxA1qKApi3zFS4LZHWFvirwuzPKPJfmGAq9RKJL"
     "OWPpLKJ9xci1wnpJZgflpxhMVi3M42w2s745z+rDKLosGI/Yu5gerbKXUFkuy5lWmRmafzrdDs0/FhT/XPRoEg2pCeuuYFhldzLq"
     "fib2Faaf1nepLpnfrL8xE4HPElvzGcXwG1l3WyvYjTyv8l5iKU8r28R6OLHDKruZzXs7KDmKsq8B5VwAYLbyvcTLs0yLJyzv5B6x"
-    "0DFgqcwiVHxFbMWT7tjXua+yvEJUepGRMSg9OtW3HMMrtTYvsKOWd2UMSp3ndxEj6JjqoKdyvdKH6gyjEezI6wDu5N1VoU+5J+zt"
+    "0DFgqcwiVHxFbMWT7tjXua+yvEJUepGRMSg9OtW3HMMrtTYvsKOmb2MonSp3ndxEj6JjqoKdyvdKH6gyjEezI6wDu5N1VoU+5J+zt"
     "As+t3Zn2ynTncz3rjzx3jcLf3+hXSY/QybG0VsHAbD43jEe0j/ZaG6V7lMBD4sl6zHzKGR+U3rNkeNyOhRKDyPa+1/YNvnKyTXl9"
-    "WBI338txpjs169OdeL8eeiXruzQGNC+hIAZ07wbP6LkdJAYQ3xYDqBW8qMec9ermjTGYM2z2vUSNwULhb9QYjN+MXK/PKHoXgcWN"
+    "WBI338txpjs169OdeL8eeiXruzQGNC+hIAZ07wbP6LkdJAYQ3xYDqBW8qMec9ermjTGYM2z2vUSNWULhb9QYjN+MXK/PKHoXgcWN"
     "u0y+PwCrM7WXjBhXegm9l4w5UvNekt/V6D2F8kP/Bt0znV5hWOHO6vm3NzpjMMi5jk7PXTZzoiCrzvbSuXJ3six+3I4ozzWEyaYa"
     "FYy5QH/GnjAG/k7+VkBnDvUnktqsrcLb6jEf5Q61bRXdl0yWOM+9vRKPTuG3Bdj9lTsnkL5r5Jqg90FmR6dggN536Q43yk3flvvl"
     "dE55Mfvvl9n/SdzKvg=="
@@ -855,15 +846,15 @@ if "carbon-gsr2 capa" not in sd:
                   "                       ? float(ancho) / float(pitch)\n"
                   "                       : 1.0f;\n",
               "    pase_escala_ = (es_sombras && pitch && ancho && ancho != pitch)\n"
-              "                       ? float(ancho) / float(pitch)\n"
-              "                       : 1.0f;\n"
-              "    pase_escala_y_ = pase_escala_;\n"
-              "    pase_capa_ = false;\n"
-              "    if (imagenes[0] && imagenes[0]->ancho_guest && imagenes[0]->alto_guest) {  // carbon-gsr2 capa\n"
-              "      pase_escala_ = float(imagenes[0]->ancho) / float(imagenes[0]->ancho_guest);\n"
-              "      pase_escala_y_ = float(imagenes[0]->alto) / float(imagenes[0]->alto_guest);\n"
-              "      pase_capa_ = true;\n"
-              "    }\n", "capa pass scale")
+                  "                       ? float(ancho) / float(pitch)\n"
+                  "                       : 1.0f;\n"
+                  "    pase_escala_y_ = pase_escala_;\n"
+                  "    pase_capa_ = false;\n"
+                  "    if (imagenes[0] && imagenes[0]->ancho_guest && imagenes[0]->alto_guest) {  // carbon-gsr2 capa\n"
+                  "      pase_escala_ = float(imagenes[0]->ancho) / float(imagenes[0]->ancho_guest);\n"
+                  "      pase_escala_y_ = float(imagenes[0]->alto) / float(imagenes[0]->alto_guest);\n"
+                  "      pase_capa_ = true;\n"
+                  "    }\n", "capa pass scale")
     wr(pd, sd)
     print("patched nfsmw_nativo_dibujos.cpp (HUD layer scale)")
 
@@ -1099,6 +1090,64 @@ if "carbon-gsr2 capa" not in s5:
     wr(p5, s5)
     print("patched nfsmw_nativo_destinos.cpp (HUD layer)")
 
+# ---- destinos.cpp: draw listing (diagnostic, off by default)
+s6 = rd(p5)
+if "carbon-gsr2 diag" not in s6:
+    s6 = once(s6, "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_hud_nativo, true, \"NFSMW\",\n",
+              "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_diag_dibujos, false, \"NFSMW\",\n"
+              "                    \"Snapdragon GSR 2 (diagnostico, carbon-gsr2 diag): lista cada 450 fotogramas los dibujos al RT frontal \"\n"
+              "                    \"(clase, shaders, mezcla, profundidad, viewport, tijera); maximo 3 listas con mas de 150 dibujos\");\n"
+              "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_hud_nativo, true, \"NFSMW\",\n", "diag cvar")
+    s6 = once(s6, "    const bool hud = !con_z && !opaco;\n    const uint32_t huella = p.ps ? uint32_t(p.ps->huella) : 0;\n",
+              "    const bool hud = !con_z && !opaco;\n    const uint32_t huella = p.ps ? uint32_t(p.ps->huella) : 0;\n"
+              "    if (gsr_diag_recoger_) {  // carbon-gsr2 diag\n"
+              "      const uint32_t tl = r[gr::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL], br = r[gr::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR];\n"
+              "      auto f = [&](uint32_t reg) { return std::bit_cast<float>(r[reg]); };\n"
+              "      gsr_diag_ += fmt::format(\"  #{} {} VS n{} {:08X} PS n{} {:08X} mezcla {:08X} z {:08X} mascara {:X} vp x {:.0f}+-{:.0f} y {:.0f}+-{:.0f} tijera ({},{})-({},{})\\n\",\n"
+              "                               gsr_diag_n_++, con_z ? 'S' : (opaco ? 'O' : 'H'), p.vs ? uint32_t(p.vs->numero) : 0,\n"
+              "                               p.vs ? uint32_t(p.vs->huella) : 0, p.ps ? uint32_t(p.ps->numero) : 0, huella, mezcla, control_z,\n"
+              "                               r[gr::XE_GPU_REG_RB_COLOR_MASK] & 0xF, f(gr::XE_GPU_REG_PA_CL_VPORT_XOFFSET),\n"
+              "                               f(gr::XE_GPU_REG_PA_CL_VPORT_XSCALE), f(gr::XE_GPU_REG_PA_CL_VPORT_YOFFSET),\n"
+              "                               f(gr::XE_GPU_REG_PA_CL_VPORT_YSCALE), tl & 0x3FFF, (tl >> 16) & 0x3FFF, br & 0x3FFF,\n"
+              "                               (br >> 16) & 0x3FFF);\n"
+              "    }\n", "diag collect")
+    s6 = once(s6, "    if (gsr_capa_activa_ && (gsr_fotogramas_ < 6 || gsr_fotogramas_ % 300 == 0)) {\n",
+              "    if (gsr_diag_recoger_) {  // carbon-gsr2 diag\n"
+              "      gsr_diag_recoger_ = false;\n"
+              "      if (gsr_diag_n_ > 150) {\n"
+              "        ++gsr_diag_vuelcos_;\n"
+              "        REXLOG_INFO(\"[gsr2] LISTA de dibujos al RT frontal (fotograma {}, {} dibujos):\", gsr_fotogramas_ + 1, gsr_diag_n_);\n"
+              "        size_t desde = 0;\n"
+              "        while (desde < gsr_diag_.size()) {\n"
+              "          size_t hasta = gsr_diag_.find('\\n', desde);\n"
+              "          if (hasta == std::string::npos) {\n"
+              "            hasta = gsr_diag_.size();\n"
+              "          }\n"
+              "          REXLOG_INFO(\"[gsr2]{}\", std::string_view(gsr_diag_).substr(desde, hasta - desde));\n"
+              "          desde = hasta + 1;\n"
+              "        }\n"
+              "      }\n"
+              "      gsr_diag_.clear();\n"
+              "      gsr_diag_n_ = 0;\n"
+              "    }\n"
+              "    if (!gsr_diag_cvar_leida_) {\n"
+              "      gsr_diag_cvar_leida_ = true;\n"
+              "      gsr_diag_activo_ = REXCVAR_GET(nfsmw_gsr2_diag_dibujos);\n"
+              "    }\n"
+              "    if (gsr_diag_activo_ && gsr_diag_vuelcos_ < 3 && (gsr_fotogramas_ + 1) % 450 == 0) {\n"
+              "      gsr_diag_recoger_ = true;  // the next frame is listed\n"
+              "      gsr_diag_n_ = 0;\n"
+              "    }\n"
+              "    if (gsr_capa_activa_ && (gsr_fotogramas_ < 6 || gsr_fotogramas_ % 300 == 0)) {\n", "diag dump")
+    s6 = once(s6, "  std::vector<uint32_t> gsr_registros_;\n",
+              "  std::vector<uint32_t> gsr_registros_;\n"
+              "  // carbon-gsr2 diag\n"
+              "  std::string gsr_diag_;\n"
+              "  uint32_t gsr_diag_n_ = 0, gsr_diag_vuelcos_ = 0;\n"
+              "  bool gsr_diag_recoger_ = false, gsr_diag_cvar_leida_ = false, gsr_diag_activo_ = false;\n", "diag members")
+    wr(p5, s6)
+    print("patched nfsmw_nativo_destinos.cpp (draw listing)")
+
 # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
 p = C + "/CMakeLists.txt"
 s = rd(p)
@@ -1113,9 +1162,6 @@ else:
 p = C + "/android/app/src/main/cpp/carbon_graphics.cpp"
 s = rd(p)
 if "carbon-gsr2" in s:
-    # first version hooked sub_82453428 (the render thread's whole loop): move the bracket to sub_82453048.
-    # The old block is the last thing in the file; it starts at a comment line ("//", or "#" if an editor changed it).
-    import re
     m = re.search(r"\n(?://|#) carbon-gsr2: one camera", s)
     if m and s[m.start():] != HOOK_BLOCK:
         s = s[:m.start()] + HOOK_BLOCK
