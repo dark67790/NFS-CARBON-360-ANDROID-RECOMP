@@ -920,7 +920,7 @@ if "carbon-gsr2 capa" not in s5:
       for (uint32_t i = 0; i < kCapasGsr; ++i) {
         if (!Crear(gsr_capa_[i], gsr_salida_ancho_, gsr_salida_alto_,
                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                   FormatoHostDestinoColor(3))) {
+                   FormatoHostDestinoColor(0))) {  // 8888: the layer clamps like the game's own HUD target (no NaN/out-of-range colors)
           for (uint32_t j = 0; j <= i; ++j) {
             Destruir(gsr_capa_[j]);
           }
@@ -1037,7 +1037,7 @@ if "carbon-gsr2 capa" not in s5:
     }
     // The registers of the draw, with the layer as target (80 KB per draw: the HUD is 30-70 draws).
     gsr_registros_.assign(r, r + kRegistrosEspejo);
-    gsr_registros_[gr::XE_GPU_REG_RB_COLOR_INFO] = (info & ~0xFFFu) | kBaseCapaGsr;
+    gsr_registros_[gr::XE_GPU_REG_RB_COLOR_INFO] = (info & ~(0xFFFu | (0xFu << 16))) | kBaseCapaGsr;  // base of the layer, format k_8_8_8_8
     gsr_registros_[gr::XE_GPU_REG_RB_BLENDCONTROL0] = GsrMezclaCapa(r[gr::XE_GPU_REG_RB_BLENDCONTROL0]);
     const uint32_t mascara = r[gr::XE_GPU_REG_RB_COLOR_MASK];
     if ((mascara & 0x7) == 0x7) {
