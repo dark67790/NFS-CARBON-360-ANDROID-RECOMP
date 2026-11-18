@@ -1157,6 +1157,52 @@ if "carbon-gsr2 diag" not in s6:
     wr(p5, s6)
     print("patched nfsmw_nativo_destinos.cpp (draw listing)")
 
+# ---- destinos.cpp: layer experiments (diagnostic, off by default)
+s7 = rd(p5)
+if "carbon-gsr2 diag2" not in s7:
+    s7 = once(s7, "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_hud_nativo, true, \"NFSMW\",\n",
+              "REXCVAR_DEFINE_INT32(nfsmw_gsr2_diag_capa, 0, \"NFSMW\",\n"
+              "                     \"Snapdragon GSR 2 (diagnostico, carbon-gsr2 diag2): mascara de pruebas de la capa del HUD. 1 = no dibuja \"\n"
+              "                     \"los dibujos con VS 72; 2 = no dibuja los aditivos; 4 = no dibuja los de mezcla normal (salvo VS 72); \"\n"
+              "                     \"8 = capa a la escala del juego (sin 1.248)\");\n"
+              "REXCVAR_DEFINE_BOOL(nfsmw_gsr2_hud_nativo, true, \"NFSMW\",\n", "diag2 cvar")
+    s7 = once(s7, "      gsr_capa_permitida_ = REXCVAR_GET(nfsmw_gsr2_hud_nativo);\n",
+              "      gsr_capa_permitida_ = REXCVAR_GET(nfsmw_gsr2_hud_nativo);\n"
+              "      gsr_diag_capa_ = uint32_t(REXCVAR_GET(nfsmw_gsr2_diag_capa));  // carbon-gsr2 diag2\n"
+              "      if (gsr_diag_capa_) {\n"
+              "        REXLOG_INFO(\"[gsr2] PRUEBAS de la capa del HUD, mascara {}\", gsr_diag_capa_);\n"
+              "      }\n", "diag2 read")
+    s7 = once(s7, "    salida = p;\n    salida.registros = gsr_registros_.data();\n    ++gsr_capa_dibujos_;\n",
+              "    salida = p;\n    salida.registros = gsr_registros_.data();\n    ++gsr_capa_dibujos_;\n"
+              "    if (gsr_diag_capa_) {  // carbon-gsr2 diag2\n"
+              "      const uint32_t m = r[gr::XE_GPU_REG_RB_BLENDCONTROL0];\n"
+              "      const bool aditivo = ((m >> 8) & 0x1F) == 1 && (m & 0x1F) != 1;\n"
+              "      const bool vs72 = p.vs && p.vs->numero == 72;\n"
+              "      if (((gsr_diag_capa_ & 1) && vs72) || ((gsr_diag_capa_ & 2) && aditivo) ||\n"
+              "          ((gsr_diag_capa_ & 4) && !aditivo && !vs72)) {\n"
+              "        gsr_descartar_ = true;\n"
+              "      }\n"
+              "    }\n", "diag2 drop")
+    s7 = once(s7, "      if (GsrRedirigir(peticion, en_capa)) {\n        a_dibujar = &en_capa;\n",
+              "      if (GsrRedirigir(peticion, en_capa)) {\n        a_dibujar = &en_capa;\n"
+              "        if (gsr_descartar_) {  // carbon-gsr2 diag2\n"
+              "          gsr_descartar_ = false;\n"
+              "          return true;\n"
+              "        }\n", "diag2 dibujar")
+    s7 = once(s7, "      capa.ancho_guest = uint32_t(gw);  // the size the game thinks the target has: the pass scale comes from it\n"
+                  "      capa.alto_guest = uint32_t(gh);\n",
+              "      capa.ancho_guest = uint32_t(gw);  // the size the game thinks the target has: the pass scale comes from it\n"
+              "      capa.alto_guest = uint32_t(gh);\n"
+              "      if (gsr_diag_capa_ & 8) {  // carbon-gsr2 diag2: no scale\n"
+              "        capa.ancho_guest = capa.ancho;\n"
+              "        capa.alto_guest = capa.alto;\n"
+              "      }\n", "diag2 scale")
+    s7 = once(s7, "  // carbon-gsr2 diag\n  std::string gsr_diag_;\n",
+              "  // carbon-gsr2 diag2\n  uint32_t gsr_diag_capa_ = 0;\n  bool gsr_descartar_ = false;\n"
+              "  // carbon-gsr2 diag\n  std::string gsr_diag_;\n", "diag2 members")
+    wr(p5, s7)
+    print("patched nfsmw_nativo_destinos.cpp (layer experiments)")
+
 # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
 p = C + "/CMakeLists.txt"
 s = rd(p)
