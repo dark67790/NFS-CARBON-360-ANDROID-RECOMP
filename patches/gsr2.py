@@ -2,7 +2,7 @@
 """GSR 2 (victorgbd's port for Most Wanted) onto the pinned nfsmw-android + Carbon.
 usage: patch.py NFS_ROOT CARBON_ROOT MW_NATIVO_DIR
 Idempotent (marker carbon-gsr2), strict anchors (exactly one match or fail)."""
-import sys, os, shutil, base64, zlib, re
+import sys, os, shutil
 
 NFS, C, MW = sys.argv[1], sys.argv[2], sys.argv[3]
 APP = NFS + "/app/src"
@@ -272,9 +272,12 @@ else:
              "        });\n"
              "    if (gsr2_) {\n"
              "      nfsmw::gsr2::AnotarUso(con_gsr2 && llamada && ultimo_gsr2_hecho_);  // the game jitters only while it upscales\n"
-             "    }\n", "presenter refresh")
+             "    }\n", "presentar refresh")
+    # PrepararGsr2, before PintarSalida's comment
+    prep = open(os.path.dirname(os.path.abspath(__file__)) + "/prepararGsr2.inc").read() if False else None
     s = once(s, "  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n",
-             r'''  // carbon-gsr2: the composited scene before the HUD, copied when the draws to the front render target change from
+             "@@PREPARAR@@  // desde_destino = the source is a render target's image (or a retained one) with the front buffer in its\n", "prep anchor")
+    s = s.replace("@@PREPARAR@@", r'''  // carbon-gsr2: the composited scene before the HUD, copied when the draws to the front render target change from
   // "scene" (depth tested, or opaque) to "HUD" (depth off and blended: FEng text, icons, the rain). GSR 2 compares the
   // final frame with this copy to find the HUD pixels: those are not 3D (no jitter, no history). The copy goes to a
   // texture with a made-up address, in the same format as the image GSR 2 reads, so both match bit for bit.
@@ -564,7 +567,8 @@ else:
     plan.activo = true;
   }
 
-''', "prep anchor")
+''')
+    # PintarSalida
     s = once(s, "  bool PintarSalida(VulkanPresenter::VulkanGuestOutputRefreshContext& contexto, Imagen& origen,\n"
                 "                    uint32_t ancho, uint32_t alto, bool desde_destino = false) {\n",
              "  bool PintarSalida(VulkanPresenter::VulkanGuestOutputRefreshContext& contexto, Imagen& origen,\n"
@@ -677,6 +681,11 @@ else:
     print("patched nfsmw_nativo_destinos.cpp")
 
 # ---------------------------------------------------------------- 4b. HUD layer at the output's resolution
+# carbon-gsr2 capa: the HUD (and menus) is drawn at the output's size: its draws go to a transparent layer of the
+# output's size (premultiplied color + coverage) through the renderer's own scaled-pass code, and the layer is put
+# over the upscaled scene when presenting. GSR 2 then only upscales the scene. Separate blocks per file because the
+# gsr2 sources and the shader header stay on the runner (untracked) from earlier runs.
+import base64, zlib
 COMPONER_B64 = (
     "eNqVWNtu40YMffdX6LEF0s0MORepxT7YstT+QJ+KReC6znaBjR3Y3ktR9N87smOJnJD2JIAWsxbJwzs5ur+vft1sN/vVcfNX9bjf"
     "PVXfDvcfD3u4X++ennfpzbvH/epj9cN6tf9zt/1pePVz9dvvy+rz6p/Nvtp9Tf8c/95UX54P69XnJOSwTvJ+fDebrXfbw7H68ml7"
@@ -687,9 +696,9 @@ COMPONER_B64 = (
     "KzoZ2xbQg17njCcU6LtQaXjutgWyutt5RWlsV2hHfxsbTZkdWBBnjAU0TVle4bxA1qKApi3zFS4LZHWFvirwuzPKPJfmGAq9RKJL"
     "OWPpLKJ9xci1wnpJZgflpxhMVi3M42w2s745z+rDKLosGI/Yu5gerbKXUFkuy5lWmRmafzrdDs0/FhT/XPRoEg2pCeuuYFhldzLq"
     "fib2Faaf1nepLpnfrL8xE4HPElvzGcXwG1l3WyvYjTyv8l5iKU8r28R6OLHDKruZzXs7KDmKsq8B5VwAYLbyvcTLs0yLJyzv5B6x"
-    "0DFgqcwiVHxFbMWT7tjXua+yvEJUepGRMSg9OtW3HMMrtTYvsKOmb2MonSp3ndxEj6JjqoKdyvdKH6gyjEezI6wDu5N1VoU+5J+zt"
+    "0DFgqcwiVHxFbMWT7tjXua+yvEJUepGRMSg9OtW3HMMrtTYvsKOWd2UMSp3ndxEj6JjqoKdyvdKH6gyjEezI6wDu5N1VoU+5J+zt"
     "As+t3Zn2ynTncz3rjzx3jcLf3+hXSY/QybG0VsHAbD43jEe0j/ZaG6V7lMBD4sl6zHzKGR+U3rNkeNyOhRKDyPa+1/YNvnKyTXl9"
-    "WBI338txpjs169OdeL8eeiXruzQGNC+hIAZ07wbP6LkdJAYQ3xYDqBW8qMec9ermjTGYM2z2vUSNWULhb9QYjN+MXK/PKHoXgcWN"
+    "WBI338txpjs169OdeL8eeiXruzQGNC+hIAZ07wbP6LkdJAYQ3xYDqBW8qMec9ermjTGYM2z2vUSNwULhb9QYjN+MXK/PKHoXgcWN"
     "u0y+PwCrM7WXjBhXegm9l4w5UvNekt/V6D2F8kP/Bt0znV5hWOHO6vm3NzpjMMi5jk7PXTZzoiCrzvbSuXJ3six+3I4ozzWEyaYa"
     "FYy5QH/GnjAG/k7+VkBnDvUnktqsrcLb6jEf5Q61bRXdl0yWOM+9vRKPTuG3Bdj9lTsnkL5r5Jqg90FmR6dggN536Q43yk3flvvl"
     "dE55Mfvvl9n/SdzKvg=="
@@ -846,15 +855,15 @@ if "carbon-gsr2 capa" not in sd:
                   "                       ? float(ancho) / float(pitch)\n"
                   "                       : 1.0f;\n",
               "    pase_escala_ = (es_sombras && pitch && ancho && ancho != pitch)\n"
-                  "                       ? float(ancho) / float(pitch)\n"
-                  "                       : 1.0f;\n"
-                  "    pase_escala_y_ = pase_escala_;\n"
-                  "    pase_capa_ = false;\n"
-                  "    if (imagenes[0] && imagenes[0]->ancho_guest && imagenes[0]->alto_guest) {  // carbon-gsr2 capa\n"
-                  "      pase_escala_ = float(imagenes[0]->ancho) / float(imagenes[0]->ancho_guest);\n"
-                  "      pase_escala_y_ = float(imagenes[0]->alto) / float(imagenes[0]->alto_guest);\n"
-                  "      pase_capa_ = true;\n"
-                  "    }\n", "capa pass scale")
+              "                       ? float(ancho) / float(pitch)\n"
+              "                       : 1.0f;\n"
+              "    pase_escala_y_ = pase_escala_;\n"
+              "    pase_capa_ = false;\n"
+              "    if (imagenes[0] && imagenes[0]->ancho_guest && imagenes[0]->alto_guest) {  // carbon-gsr2 capa\n"
+              "      pase_escala_ = float(imagenes[0]->ancho) / float(imagenes[0]->ancho_guest);\n"
+              "      pase_escala_y_ = float(imagenes[0]->alto) / float(imagenes[0]->alto_guest);\n"
+              "      pase_capa_ = true;\n"
+              "    }\n", "capa pass scale")
     wr(pd, sd)
     print("patched nfsmw_nativo_dibujos.cpp (HUD layer scale)")
 
@@ -1162,6 +1171,9 @@ else:
 p = C + "/android/app/src/main/cpp/carbon_graphics.cpp"
 s = rd(p)
 if "carbon-gsr2" in s:
+    # first version hooked sub_82453428 (the render thread's whole loop): move the bracket to sub_82453048.
+    # The old block is the last thing in the file; it starts at a comment line ("//", or "#" if an editor changed it).
+    import re
     m = re.search(r"\n(?://|#) carbon-gsr2: one camera", s)
     if m and s[m.start():] != HOOK_BLOCK:
         s = s[:m.start()] + HOOK_BLOCK
