@@ -1831,6 +1831,104 @@ jobs:
               )
               wr(p, s)
               print("patched nfsmw_nativo_destinos.cpp")
+
+          # ---------------------------------------------------------------- 4. destinos.cpp diagnostics (own marker:
+          # the HUD layer feed/composite above may already be applied from an older run of this same file, so this
+          # can't share its "carbon-gsr2-hud" guard -- it needs to still land on a tree that already has it).
+          p = APP + "/nfsmw_nativo_destinos.cpp"
+          s = rd(p)
+          if "carbon-gsr2-hud-diag" in s:
+              print("destinos.cpp already has the HUD-layer diagnostics")
+          else:
+              s = once(
+                  s,
+                  "  ImagenNativa* capa_hud_imagen_ = nullptr;  // stable across frames: destinos_ entries are reused, not freed\n",
+                  "  ImagenNativa* capa_hud_imagen_ = nullptr;  // stable across frames: destinos_ entries are reused, not freed\n"
+                  "  // carbon-gsr2-hud-diag: counted every frame, printed by GsrFinDeFotograma's own periodic log.\n"
+                  "  bool gsr_hud_capa_pipeline_ok_ = false;    // pipeline_capa_hud_ creation (set once, Preparar)\n"
+                  "  bool gsr_hud_capa_imagen_ok_ = false;      // last PintarSalida: capa_hud_imagen_ was usable\n"
+                  "  bool gsr_hud_capa_tam_ok_ = false;         // last PintarSalida: its size matched the output\n"
+                  "  uint32_t gsr_hud_capa_pedidos_ = 0;        // GsrAntesDeDibujo asked for the redirect\n"
+                  "  uint32_t gsr_hud_capa_ok_ = 0;             // DibujarEnCapaHud actually drew\n"
+                  "  uint32_t gsr_hud_capa_compuestas_ = 0;     // PintarSalida composited the layer\n",
+                  "destinos.cpp diag members",
+              )
+              s = once(
+                  s,
+                  "    pipeline_capa_hud_ = CrearPipelineSalida(fs_, nullptr, true);\n",
+                  "    pipeline_capa_hud_ = CrearPipelineSalida(fs_, nullptr, true);\n"
+                  "    gsr_hud_capa_pipeline_ok_ = pipeline_capa_hud_ != VK_NULL_HANDLE;  // carbon-gsr2-hud-diag\n"
+                  "    REXLOG_INFO(\"[gsr2] capa de HUD: pipeline de composicion {}\",\n"
+                  "                gsr_hud_capa_pipeline_ok_ ? \"creado\" : \"FALLO (no se compondra)\");\n",
+                  "destinos.cpp diag pipeline log",
+              )
+              s = once(
+                  s,
+                  "    bool gsr_duplicar_hud = false;\n"
+                  "    if (gsr_rt_ != 0) {\n"
+                  "      gsr_duplicar_hud = GsrAntesDeDibujo(peticion);  // carbon-gsr2: the scene before the HUD\n"
+                  "    }\n",
+                  "    bool gsr_duplicar_hud = false;\n"
+                  "    if (gsr_rt_ != 0) {\n"
+                  "      gsr_duplicar_hud = GsrAntesDeDibujo(peticion);  // carbon-gsr2: the scene before the HUD\n"
+                  "      gsr_hud_capa_pedidos_ += gsr_duplicar_hud ? 1 : 0;  // carbon-gsr2-hud-diag\n"
+                  "    }\n",
+                  "destinos.cpp diag pedidos",
+              )
+              s = once(
+                  s,
+                  "    if (resultado && gsr_duplicar_hud && dibujos_) {\n"
+                  "      // carbon-gsr2-hud: the same draw, at output resolution (see GsrAntesDeDibujo).\n"
+                  "      dibujos_->DibujarEnCapaHud(peticion);\n"
+                  "    }\n",
+                  "    if (resultado && gsr_duplicar_hud && dibujos_) {\n"
+                  "      // carbon-gsr2-hud: the same draw, at output resolution (see GsrAntesDeDibujo).\n"
+                  "      gsr_hud_capa_ok_ += dibujos_->DibujarEnCapaHud(peticion) ? 1 : 0;  // carbon-gsr2-hud-diag\n"
+                  "    }\n",
+                  "destinos.cpp diag ok",
+              )
+              s = once(
+                  s,
+                  "    if (plan && gsr2_hecho && capa_hud_imagen_ && capa_hud_imagen_->ancho == ancho_salida &&\n"
+                  "        capa_hud_imagen_->alto == alto_salida && pipeline_capa_hud_ != VK_NULL_HANDLE) {\n",
+                  "    gsr_hud_capa_imagen_ok_ = capa_hud_imagen_ != nullptr;  // carbon-gsr2-hud-diag\n"
+                  "    gsr_hud_capa_tam_ok_ = capa_hud_imagen_ && capa_hud_imagen_->ancho == ancho_salida &&\n"
+                  "                           capa_hud_imagen_->alto == alto_salida;\n"
+                  "    if (plan && gsr2_hecho && capa_hud_imagen_ && capa_hud_imagen_->ancho == ancho_salida &&\n"
+                  "        capa_hud_imagen_->alto == alto_salida && pipeline_capa_hud_ != VK_NULL_HANDLE) {\n"
+                  "      ++gsr_hud_capa_compuestas_;  // carbon-gsr2-hud-diag\n",
+                  "destinos.cpp diag compuestas",
+              )
+              s = once(
+                  s,
+                  "      REXLOG_INFO(\"[gsr2] dibujos al RT frontal (fotograma {}): {} de escena (S con profundidad, O opacos), {} de HUD (H sin \"\n"
+                  "                  \"profundidad y con mezcla), {} cortes, {} copias de la escena previa al HUD ({}), {} saltadas, {} destinos restaurados antes de copiar; \"\n"
+                  "                  \"secuencia (S/O/H dibujos, R resuelto del RT, C copia hecha, x copia fallida):{}\",\n"
+                  "                  gsr_fotogramas_, gsr_n_escena_, gsr_n_hud_, gsr_cortes_, gsr_snaps_, gsr_snap_valida_ ? \"valida\" : \"NINGUNA\",\n"
+                  "                  gsr_saltadas_, gsr_restauradas_, gsr_secuencia_);\n"
+                  "    }\n"
+                  "    gsr_vio_escena_ = gsr_sucio_ = gsr_snap_valida_ = false;\n"
+                  "    gsr_hud_capa_borrada_ = false;  // carbon-gsr2-hud\n"
+                  "    gsr_snaps_ = gsr_n_escena_ = gsr_n_hud_ = gsr_cortes_ = gsr_saltadas_ = gsr_restauradas_ = 0;\n",
+                  "      REXLOG_INFO(\"[gsr2] dibujos al RT frontal (fotograma {}): {} de escena (S con profundidad, O opacos), {} de HUD (H sin \"\n"
+                  "                  \"profundidad y con mezcla), {} cortes, {} copias de la escena previa al HUD ({}), {} saltadas, {} destinos restaurados antes de copiar; \"\n"
+                  "                  \"secuencia (S/O/H dibujos, R resuelto del RT, C copia hecha, x copia fallida):{}\",\n"
+                  "                  gsr_fotogramas_, gsr_n_escena_, gsr_n_hud_, gsr_cortes_, gsr_snaps_, gsr_snap_valida_ ? \"valida\" : \"NINGUNA\",\n"
+                  "                  gsr_saltadas_, gsr_restauradas_, gsr_secuencia_);\n"
+                  "      // carbon-gsr2-hud-diag\n"
+                  "      REXLOG_INFO(\"[gsr2] capa de HUD: pipeline {}, pedidos {}, dibujados {}, compuestas {}; al componer: imagen {}, tamano {}\",\n"
+                  "                  gsr_hud_capa_pipeline_ok_ ? \"ok\" : \"FALLO\", gsr_hud_capa_pedidos_, gsr_hud_capa_ok_,\n"
+                  "                  gsr_hud_capa_compuestas_, gsr_hud_capa_imagen_ok_ ? \"ok\" : \"FALLO\",\n"
+                  "                  gsr_hud_capa_tam_ok_ ? \"ok\" : \"FALLO\");\n"
+                  "    }\n"
+                  "    gsr_vio_escena_ = gsr_sucio_ = gsr_snap_valida_ = false;\n"
+                  "    gsr_hud_capa_borrada_ = false;  // carbon-gsr2-hud\n"
+                  "    gsr_snaps_ = gsr_n_escena_ = gsr_n_hud_ = gsr_cortes_ = gsr_saltadas_ = gsr_restauradas_ = 0;\n"
+                  "    gsr_hud_capa_pedidos_ = gsr_hud_capa_ok_ = gsr_hud_capa_compuestas_ = 0;  // carbon-gsr2-hud-diag\n",
+                  "destinos.cpp diag periodic log",
+              )
+              wr(p, s)
+              print("patched nfsmw_nativo_destinos.cpp (diag)")
           PY
       - name: Link game copy next to the repo
         run: |
