@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """GSR 2 (victorgbd's port for Most Wanted) onto the pinned nfsmw-android + Carbon.
 usage: patch.py NFS_ROOT CARBON_ROOT MW_NATIVO_DIR
@@ -1227,6 +1226,20 @@ if "carbon-gsr2 diag3" not in s8:
               "          ((gsr_diag_capa_ & 1) && vs72) || ((gsr_diag_capa_ & 2) && aditivo) ||\n", "diag3 split")
     wr(p5, s8)
     print("patched nfsmw_nativo_destinos.cpp (diag3)")
+
+# ---- destinos.cpp: test 64 = the first additive group is drawn opaque (diagnostic)
+s9 = rd(p5)
+if "carbon-gsr2 diag4" not in s9:
+    s9 = once(s9, "    gsr_registros_[gr::XE_GPU_REG_RB_BLENDCONTROL0] = GsrMezclaCapa(r[gr::XE_GPU_REG_RB_BLENDCONTROL0]);\n",
+              "    gsr_registros_[gr::XE_GPU_REG_RB_BLENDCONTROL0] = GsrMezclaCapa(r[gr::XE_GPU_REG_RB_BLENDCONTROL0]);\n"
+              "    if ((gsr_diag_capa_ & 64) && gsr_capa_dibujos_ <= 100) {  // carbon-gsr2 diag4\n"
+              "      const uint32_t m0 = r[gr::XE_GPU_REG_RB_BLENDCONTROL0];\n"
+              "      if (((m0 >> 8) & 0x1F) == 1 && (m0 & 0x1F) != 1) {\n"
+              "        gsr_registros_[gr::XE_GPU_REG_RB_BLENDCONTROL0] = 0x00010001;  // replace: the draw's own color, no blend\n"
+              "      }\n"
+              "    }\n", "diag4 blend")
+    wr(p5, s9)
+    print("patched nfsmw_nativo_destinos.cpp (diag4)")
 
 # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
 p = C + "/CMakeLists.txt"
