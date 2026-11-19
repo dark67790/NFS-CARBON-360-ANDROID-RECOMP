@@ -1241,6 +1241,23 @@ if "carbon-gsr2 diag4" not in s9:
     wr(p5, s9)
     print("patched nfsmw_nativo_destinos.cpp (diag4)")
 
+# ---- destinos.cpp: test 128 = slot 4 of the first additive group is replaced by slot 1 (diagnostic)
+s11 = rd(p5)
+if "carbon-gsr2 diag6" not in s11:
+    s11 = once(s11, "    gsr_registros_[gr::XE_GPU_REG_RB_BLENDCONTROL0] = GsrMezclaCapa(r[gr::XE_GPU_REG_RB_BLENDCONTROL0]);\n",
+               "    gsr_registros_[gr::XE_GPU_REG_RB_BLENDCONTROL0] = GsrMezclaCapa(r[gr::XE_GPU_REG_RB_BLENDCONTROL0]);\n"
+               "    if ((gsr_diag_capa_ & 128) && gsr_capa_dibujos_ <= 100) {  // carbon-gsr2 diag6\n"
+               "      const uint32_t m1 = r[gr::XE_GPU_REG_RB_BLENDCONTROL0];\n"
+               "      if (((m1 >> 8) & 0x1F) == 1 && (m1 & 0x1F) != 1) {\n"
+               "        for (uint32_t k = 0; k < 6; ++k) {\n"
+               "          gsr_registros_[gr::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 6 * 4 + k] =\n"
+               "              r[gr::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 6 * 1 + k];\n"
+               "        }\n"
+               "      }\n"
+               "    }\n", "diag6 slot4")
+    wr(p5, s11)
+    print("patched nfsmw_nativo_destinos.cpp (diag6)")
+
 # ---- destinos.cpp: texture comparison between GSR on and off (diagnostic, works with GSR off too)
 s10 = rd(p5)
 if "carbon-gsr2 diag5" not in s10:
