@@ -1324,6 +1324,46 @@ if "carbon-gsr2 diag5" not in s10:
     wr(p5, s10)
     print("patched nfsmw_nativo_destinos.cpp (diag5)")
 
+# ---- destinos.cpp: vertex data + VS constants of the route draws (diagnostic, with nfsmw_gsr2_diag_texturas)
+s12 = rd(p5)
+if "carbon-gsr2 diag7" not in s12:
+    s12 = once(s12, "    ++gsr_diag_tex_lineas_;\n",
+               "    {  // carbon-gsr2 diag7\n"
+               "      std::string v;\n"
+               "      for (uint32_t j = 0; j < 96; ++j) {\n"
+               "        const uint32_t* c = r + gr::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + j * 2;\n"
+               "        const uint32_t dir = c[0] & ~3u, tam = (c[1] >> 2) & 0xFFFFFF;\n"
+               "        if ((c[0] & 3) != 3 || !dir || !tam || tam > 0x40000) {\n"
+               "          continue;\n"
+               "        }\n"
+               "        uint32_t w[8] = {};\n"
+               "        uint64_t h = 1469598103934665603ull;\n"
+               "        if (const uint8_t* d = memoria_->TranslatePhysical(dir)) {\n"
+               "          const uint32_t n = std::min<uint32_t>(tam * 4, 1024);\n"
+               "          for (uint32_t b = 0; b < n; ++b) {\n"
+               "            h = (h ^ d[b]) * 1099511628211ull;\n"
+               "          }\n"
+               "          for (uint32_t k = 0; k < 8 && k < tam; ++k) {\n"
+               "            uint32_t x;\n"
+               "            std::memcpy(&x, d + k * 4, 4);\n"
+               "            w[k] = __builtin_bswap32(x);\n"
+               "          }\n"
+               "        }\n"
+               "        v += fmt::format(\" | vf{} {:08X} {}dw hash {:016X} [{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}]\",\n"
+               "                         j, dir, tam, h, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);\n"
+               "      }\n"
+               "      std::string kc;\n"
+               "      for (uint32_t i = 0; i < 16; ++i) {\n"
+               "        float f[4];\n"
+               "        std::memcpy(f, r + 0x4000 + i * 4, 16);\n"
+               "        kc += fmt::format(\" c{}({:.3f} {:.3f} {:.3f} {:.3f})\", i, f[0], f[1], f[2], f[3]);\n"
+               "      }\n"
+               "      REXLOG_INFO(\"[gsr2] VTX GSR {}{} || VS{}\", gsr_rt_ != 0 ? \"si\" : \"no\", v, kc);\n"
+               "    }\n"
+               "    ++gsr_diag_tex_lineas_;\n", "diag7")
+    wr(p5, s12)
+    print("patched nfsmw_nativo_destinos.cpp (diag7)")
+
 # ---------------------------------------------------------------- 5. Carbon: CMake + camera hooks
 p = C + "/CMakeLists.txt"
 s = rd(p)
