@@ -15,6 +15,14 @@ on:
         description: "Upload the APK as an artifact (visible to anyone who can see the repo)"
         type: boolean
         default: false
+      patch_widescreen:
+        description: "Apply the widescreen patch (carbon_widescreen, carbon_aspect, Hor+ camera)"
+        type: boolean
+        default: true
+      patch_blur:
+        description: "Apply the blur patch (c173 / cvBlurParams scale, limit and override)"
+        type: boolean
+        default: true
 
 concurrency:
   group: carbon-android-arm64
@@ -225,6 +233,9 @@ jobs:
           if [ ! -d nfsmw-android/.git ]; then git clone "$NFSMW_ANDROID_REPO" nfsmw-android; fi
           git -C nfsmw-android fetch --tags origin
           git -C nfsmw-android checkout --force "$NFSMW_ANDROID_SHA"
+          # leftovers of the removed GSR 2 patch (untracked, so checkout --force does not reset them)
+          rm -f nfsmw-android/app/src/nfsmw_gsr2.cpp nfsmw-android/app/src/nfsmw_gsr2.h \
+                nfsmw-android/app/src/shaders/nfsmw_sgsr2_*_ps.h
 
           python - <<'PY'
           import pathlib, sys
@@ -271,31 +282,20 @@ jobs:
           fi
 
       - name: Patch - widescreen v2 (carbon_widescreen auto-detect, carbon_aspect, Hor+ camera)
+        if: inputs.patch_widescreen
         shell: bash
         run: |
           set -euo pipefail
           python3 "$GITHUB_WORKSPACE/patches/widescreen.py" "$GITHUB_WORKSPACE/android/app/src/main/cpp/carbon_graphics.cpp"
 
       - name: Patch - blur strength (c173 / cvBlurParams) scale, limit and override in the native renderer
+        if: inputs.patch_blur
         shell: bash
         run: |
           set -euo pipefail
           NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android"
           python3 "$GITHUB_WORKSPACE/patches/blur.py" "$NFS/app/src"
 
-      - name: Patch - GSR 2 temporal upscaler (victorgbd's port, pinned) for Carbon
-        shell: bash
-        run: |
-          set -euo pipefail
-          MWDIR="$W/_gsr2_src"
-          MW_SHA=3ac2fb698576d8889ade19660c38d0fd25f2c5a5
-          if [ ! -f "$MWDIR/nativo/app/src/nfsmw_gsr2.cpp" ] || [ "$(git -C "$MWDIR" rev-parse HEAD 2>/dev/null)" != "$MW_SHA" ]; then
-            rm -rf "$MWDIR"; mkdir -p "$MWDIR"
-            git -C "$MWDIR" init -q
-            git -C "$MWDIR" fetch -q --depth 1 https://github.com/victorgbd/NFSMW-Recompiled-Mobile.git "$MW_SHA"
-            git -C "$MWDIR" checkout -q FETCH_HEAD
-          fi
-          python3 "$GITHUB_WORKSPACE/patches/gsr2.py" "$W/nfsmw-android" "$GITHUB_WORKSPACE" "$MWDIR/nativo"
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
@@ -357,9 +357,6 @@ jobs:
 
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
-
-      - name: Remove stale validation layer (never bundled)
-        run: rm -f android/app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so
 
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
