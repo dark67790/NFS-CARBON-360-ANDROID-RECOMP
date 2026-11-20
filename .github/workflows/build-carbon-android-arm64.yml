@@ -358,6 +358,16 @@ jobs:
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
 
+      - name: Find streamer functions (diagnostic)
+        run: |
+          python3 tools/find_streamer.py generated/default | tee streamer.txt
+
+      - name: Upload streamer.txt
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamer-txt
+          path: streamer.txt
+
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
           cd android
