@@ -360,7 +360,7 @@ jobs:
 
       - name: Find streamer functions (diagnostic)
         run: |
-          python3 tools/find_streamer.py generated/default | tee streamer.txt
+          python3 "$GITHUB_WORKSPACE/patches/find_streamer.py" "$GITHUB_WORKSPACE/generated/default" | tee "$GITHUB_WORKSPACE/streamer.txt"
 
       - name: Upload streamer.txt
         uses: actions/upload-artifact@v4
