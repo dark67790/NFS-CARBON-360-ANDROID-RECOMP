@@ -368,6 +368,16 @@ jobs:
           name: streamer-txt
           path: streamer.txt
 
+      - name: Dump streamer functions
+        run: |
+          python3 "$GITHUB_WORKSPACE/patches/dump_funcs.py" "$GITHUB_WORKSPACE/generated/default" sub_825814D0 sub_825818B8 sub_8257D700 sub_8258A2C0 > "$GITHUB_WORKSPACE/dump.txt"
+
+      - name: Upload dump.txt
+        uses: actions/upload-artifact@v4
+        with:
+          name: dump-txt
+          path: dump.txt
+
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
           cd android
