@@ -23,6 +23,10 @@ on:
         description: "Apply the blur patch (c173 / cvBlurParams scale, limit and override)"
         type: boolean
         default: true
+      patch_streaming:
+        description: "Apply the streaming fix (the game requests track sections further ahead: less popping and fewer hitches at corners)"
+        type: boolean
+        default: true
 
 concurrency:
   group: carbon-android-arm64
@@ -296,6 +300,13 @@ jobs:
           NFS="$(dirname "$GITHUB_WORKSPACE")/nfsmw-android"
           python3 "$GITHUB_WORKSPACE/patches/blur.py" "$NFS/app/src"
 
+      - name: Patch - streaming anticipation (GetPredictedZone looks further ahead)
+        if: inputs.patch_streaming
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/patches/streaming.py" "$GITHUB_WORKSPACE"
+
       - name: Link game copy next to the repo
         run: |
           # nfscarbon_manifest.toml points at ../need_for_speed_carbon (lowercase).
@@ -357,26 +368,6 @@ jobs:
 
       - name: Verify registration maps
         run: python tools/verify_registration_maps.py
-
-      - name: Find streamer functions (diagnostic)
-        run: |
-          python3 "$GITHUB_WORKSPACE/patches/find_streamer.py" "$GITHUB_WORKSPACE/generated/default" | tee "$GITHUB_WORKSPACE/streamer.txt"
-
-      - name: Upload streamer.txt
-        uses: actions/upload-artifact@v4
-        with:
-          name: streamer-txt
-          path: streamer.txt
-
-      - name: Dump streamer functions
-        run: |
-          python3 "$GITHUB_WORKSPACE/patches/dump_funcs.py" "$GITHUB_WORKSPACE/generated/default" sub_825814D0 sub_825818B8 sub_8257D700 sub_8258A2C0 > "$GITHUB_WORKSPACE/dump.txt"
-
-      - name: Upload dump.txt
-        uses: actions/upload-artifact@v4
-        with:
-          name: dump-txt
-          path: dump.txt
 
       - name: Build APK (Gradle, aarch64 toolchain)
         run: |
